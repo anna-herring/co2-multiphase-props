@@ -272,7 +272,7 @@ def _ift(nw_id, T_C, P_MPa, S_g_L):
     """
     T_clamp = np.clip(T_C, _IFT_T[0], _IFT_T[-1])
     P_clamp = np.clip(P_MPa, _IFT_P[0], _IFT_P[-1])
-    ift_fw = float(_IFT_INTERP[nw_id]([[T_clamp, P_clamp]]))
+    ift_fw = float(_IFT_INTERP[nw_id]([[T_clamp, P_clamp]]).flat[0])
     ift = ift_fw + 0.04 * S_g_L   # salinity correction
     return _safe(ift)
 
