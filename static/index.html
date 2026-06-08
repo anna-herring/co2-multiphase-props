@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multiphase Flow Fluid Properties</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f0f2f5; --panel: #ffffff; --border: #dde1e7;
+    --text: #1a1a2e; --muted: #6b7280; --accent: #2563eb;
+    --shadow: 0 1px 4px rgba(0,0,0,.08), 0 2px 12px rgba(0,0,0,.05);
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg);
+         color: var(--text); font-size: 14px; min-height: 100vh; }
+
+  header { background: #1a1a2e; color: #fff; padding: 12px 20px;
+           display: flex; align-items: center; gap: 14px; }
+  header h1 { font-size: 19px; font-weight: 600; }
+  header p  { font-size: 12px; color: #9ca3af; }
+
+  /* ── Sidebar toggle button ── */
+  #sidebar-toggle {
+    display: flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; flex-shrink: 0;
+    background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 7px; cursor: pointer; color: #fff;
+    font-size: 17px; line-height: 1;
+    transition: background .15s;
+    margin-right: 4px;
+  }
+  #sidebar-toggle:hover { background: rgba(255,255,255,0.20); }
+
+  /* On small screens just hide the subtitle — sidebar state is handled by JS */
+  @media (max-width: 700px) {
+    header p { display: none; }
+    .chart-wrap { padding: 10px 8px; }
+    .chart-wrap canvas { height: 340px !important; }
+  }
+
+  .app { display: flex; min-height: calc(100vh - 54px); }
+
+  /* ── Sidebar ── */
+  aside {
+    background: #fff; border-right: 1px solid var(--border);
+    padding: 18px 18px; display: flex; flex-direction: column; gap: 20px;
+    overflow: hidden; overflow-y: auto;
+    width: 310px; min-width: 310px;
+    transition: width .28s ease, min-width .28s ease,
+                padding .28s ease, opacity .2s ease, border-width .28s ease;
+    flex-shrink: 0;
+  }
+  aside.collapsed {
+    width: 0; min-width: 0; padding: 0;
+    opacity: 0; border-right-width: 0;
+    overflow: hidden;
+  }
+  main { flex: 1; min-width: 0; }
+
+  .ctrl-group label.group-label {
+    display: block; font-size: 11px; font-weight: 700;
+    letter-spacing: .06em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 10px;
+  }
+  .ctrl-group { padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+  .ctrl-group:last-child { border-bottom: none; }
+
+  .slider-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .slider-row span.param-name { font-size: 12px; color: var(--muted); min-width: 70px; }
+  .slider-row input[type=range] { flex: 1; accent-color: var(--accent); cursor: pointer; }
+  .slider-val { min-width: 72px; text-align: right; font-variant-numeric: tabular-nums;
+                font-size: 13px; font-weight: 600; }
+
+  .num-row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .num-row span.param-name { font-size: 12px; color: var(--muted); flex: 1; }
+  .num-row input[type=number] {
+    width: 90px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 5px;
+    font-size: 13px; font-weight: 600; text-align: right;
+  }
+  .num-row span.unit { font-size: 11px; color: var(--muted); min-width: 38px; }
+
+  .btn-group { display: flex; gap: 7px; flex-wrap: wrap; }
+  .btn-group button {
+    padding: 6px 13px; border-radius: 6px; border: 1.5px solid var(--border);
+    background: #fff; color: var(--text); font-size: 12.5px; font-weight: 500;
+    cursor: pointer; transition: all .15s; white-space: nowrap;
+  }
+  .btn-group button:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-group button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn-group button.nw-co2.active { background:#e74c3c; border-color:#e74c3c; }
+  .btn-group button.nw-h2.active  { background:#2980b9; border-color:#2980b9; }
+  .btn-group button.nw-n2.active  { background:#27ae60; border-color:#27ae60; }
+
+  #salinity-wrap { display:none; margin-top:8px; }
+
+  .phase-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 12px;
+    font-size: 11px; font-weight: 600; letter-spacing: .04em;
+  }
+  .phase-gas           { background:#dbeafe; color:#1d4ed8; }
+  .phase-supercritical { background:#fce7f3; color:#be185d; }
+  .phase-liquid        { background:#d1fae5; color:#065f46; }
+  .phase-two-phase     { background:#fef3c7; color:#92400e; }
+
+  /* ── Main ── */
+  main { padding: 20px 24px; overflow-y: auto; }
+  .state-bar {
+    display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+    margin-bottom: 18px; padding: 10px 14px; background: var(--panel);
+    border-radius: var(--radius); border: 1px solid var(--border); box-shadow: var(--shadow);
+  }
+  .state-chip { display: flex; align-items: center; gap: 5px; font-size: 13px; }
+  .state-chip .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+  /* 2-col asymmetric: left col (NW+W stacked) | right col (Interface) */
+  .grid-props { display: grid; grid-template-columns: 1fr 1.4fr; gap: 16px; }
+  .grid-props-left { display: flex; flex-direction: column; gap: 16px; }
+  .grid2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 16px; }
+  @media (max-width: 1100px) { .grid-props, .grid2 { grid-template-columns: 1fr; } }
+
+  .card { background: var(--panel); border-radius: var(--radius);
+          border: 1px solid var(--border); box-shadow: var(--shadow); overflow: hidden; }
+  .card-head {
+    padding: 11px 15px; font-size: 12px; font-weight: 700;
+    letter-spacing: .05em; text-transform: uppercase; color: #fff;
+  }
+  .prop-table { width: 100%; border-collapse: collapse; }
+  .prop-table tr { border-bottom: 1px solid var(--border); }
+  .prop-table tr:last-child { border-bottom: none; }
+  .prop-table td { padding: 9px 14px; vertical-align: middle; }
+  .prop-table td:first-child { color: var(--muted); font-size: 12px; width: 56%; }
+  .prop-table td:last-child  { font-weight: 600; font-variant-numeric: tabular-nums;
+                                font-size: 13px; text-align: right; }
+  .prop-table tr.section-head td {
+    background: #f8f9fb; font-size: 10.5px; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--muted); padding: 6px 14px;
+  }
+
+  .chart-wrap { padding: 12px 14px; }
+
+  .source-note {
+    margin-top: 16px; padding: 10px 14px; background: var(--panel);
+    border-radius: var(--radius); border: 1px solid var(--border);
+    font-size: 11.5px; color: var(--muted); line-height: 1.6;
+  }
+  .source-note strong { color: var(--text); }
+
+  .spinner { display:none; margin:60px auto; width:34px; height:34px;
+             border:3px solid var(--border); border-top-color:var(--accent);
+             border-radius:50%; animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .error-msg { display:none; padding:12px 16px; background:#fef2f2;
+               border:1px solid #fecaca; border-radius:var(--radius);
+               color:#991b1b; font-size:13px; margin-top:12px; }
+  #results { display:none; }
+
+  /* ── Footer ── */
+  footer {
+    background: #fff; border-top: 1px solid var(--border);
+    padding: 20px 32px 24px; display: flex; flex-direction: column;
+    align-items: center; gap: 16px;
+  }
+  .footer-logos {
+    display: flex; align-items: center; justify-content: center;
+    gap: 40px; flex-wrap: wrap;
+  }
+  .footer-logo { object-fit: contain; }
+  .footer-logo-doe { height: 90px; }
+  .footer-logo-utk { height: 100px; }
+  .footer-logo-osu { height: 80px; }
+  .footer-ack {
+    max-width: 780px; text-align: center; font-size: 11.5px;
+    color: var(--muted); line-height: 1.65;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <button id="sidebar-toggle" title="Hide controls"></button>
+  <h1>Multiphase Flow Fluid Properties</h1>
+  <p>Thermodynamic, transport &amp; flow properties for CO₂/H₂/N₂ – water/brine systems</p>
+</header>
+
+<div class="app">
+<!-- ══ Sidebar ══════════════════════════════════════════════════════════════ -->
+<aside>
+
+  <!-- T, P, θ -->
+  <div class="ctrl-group">
+    <label class="group-label">Conditions</label>
+    <div class="slider-row">
+      <span class="param-name">Temperature</span>
+      <input type="range" id="T-slider" min="20" max="200" step="1" value="50">
+      <span class="slider-val"><span id="T-val">50</span> °C</span>
+    </div>
+    <div class="slider-row">
+      <span class="param-name">Pressure</span>
+      <input type="range" id="P-slider" min="0" max="20" step="0.1" value="10">
+      <span class="slider-val"><span id="P-val">10.0</span> MPa</span>
+    </div>
+    <div class="slider-row">
+      <span class="param-name">Contact angle θ</span>
+      <input type="range" id="theta-slider" min="0" max="89" step="1" value="10">
+      <span class="slider-val"><span id="theta-val">10</span> °</span>
+    </div>
+  </div>
+
+  <!-- NW fluid -->
+  <div class="ctrl-group">
+    <label class="group-label">Nonwetting Phase</label>
+    <div class="btn-group" id="nw-btns">
+      <button class="nw-co2 active" data-nw="CO2">CO₂</button>
+      <button class="nw-h2"        data-nw="H2">H₂</button>
+      <button class="nw-n2"        data-nw="N2">N₂</button>
+    </div>
+  </div>
+
+  <!-- Wetting fluid -->
+  <div class="ctrl-group">
+    <label class="group-label">Wetting Phase</label>
+    <div class="btn-group" id="w-btns">
+      <button class="active" data-w="water">Freshwater</button>
+      <button data-w="seawater">Seawater<br><small style="font-weight:400;font-size:10px">35 g/L</small></button>
+      <button data-w="brine">Brine</button>
+    </div>
+    <div id="salinity-wrap">
+      <div class="slider-row" style="margin-top:8px">
+        <span class="param-name">Salinity</span>
+        <input type="range" id="S-slider" min="1" max="350" step="1" value="100">
+        <span class="slider-val"><span id="S-val">100</span> g/L</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Core & flow parameters -->
+  <div class="ctrl-group">
+    <label class="group-label">Core &amp; Flow Parameters</label>
+    <div class="num-row">
+      <span class="param-name">Flow rate Q</span>
+      <input type="number" id="Q-inp" value="1" min="0" step="0.1">
+      <span class="unit">ml/hr</span>
+    </div>
+    <div class="num-row">
+      <span class="param-name">Core diameter</span>
+      <input type="number" id="diam-inp" value="10" min="0.1" step="0.5">
+      <span class="unit">mm</span>
+    </div>
+    <div class="num-row">
+      <span class="param-name">Porosity φ</span>
+      <input type="number" id="phi-inp" value="0.22" min="0.01" max="0.99" step="0.01">
+      <span class="unit">—</span>
+    </div>
+    <div class="num-row">
+      <span class="param-name">Char. length L</span>
+      <input type="number" id="L-inp" value="40" min="0.1" step="1">
+      <span class="unit">µm</span>
+    </div>
+  </div>
+
+  <div style="flex:1"></div>
+  <div style="font-size:11px;color:var(--muted);line-height:1.7">
+    Properties: CoolProp EoS<br>
+    Brine corr.: Rowe &amp; Chou (1970); Mao &amp; Duan (2009)<br>
+    Solubility: Henry + KK correction<br>
+    Diffusivity: Stokes–Einstein<br>
+    IFT: tabulated literature data<br>
+    Diagrams: Lenormand et al. (1988)
+  </div>
+</aside>
+
+<!-- ══ Main panel ═══════════════════════════════════════════════════════════ -->
+<main>
+  <div class="spinner" id="spinner"></div>
+  <div class="error-msg" id="error-msg"></div>
+  <div id="results">
+
+    <div class="state-bar" id="state-bar"></div>
+
+    <div class="grid-props" id="prop-grid"></div>
+
+    <!-- Charts row -->
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head" style="background:#374151">Lenormand Regime Diagram</div>
+        <div class="chart-wrap"><canvas id="lenormand-chart" height="310"></canvas></div>
+        <div style="padding:0 14px 10px;font-size:10.5px;color:var(--muted)">
+          x = log(μ<sub>inj</sub>/μ<sub>def</sub>), y = log Ca. Solid = Lenormand et al. (1988); dashed = Zhang et al. (2011).
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head" style="background:#374151">Force Balance Diagram</div>
+        <div class="chart-wrap"><canvas id="force-chart" height="310"></canvas></div>
+        <div style="padding:0 14px 10px;font-size:10.5px;color:var(--muted)">
+          x = Ca/Bo (viscous/gravity), y = 1/Bo (capillary/gravity). Both log scale.
+          Dominant force regions separated by Ca/Bo = 1 and 1/Bo = 1.
+        </div>
+      </div>
+    </div>
+
+    <div class="source-note" id="source-note"></div>
+  </div>
+</main>
+</div>
+
+<!-- ══ Footer ═══════════════════════════════════════════════════════════════ -->
+<footer>
+  <div class="footer-logos">
+    <img src="doe_logo.png"  alt="U.S. Department of Energy Awardee" class="footer-logo footer-logo-doe">
+    <img src="utk_logo.png"  alt="University of Tennessee Knoxville – Civil &amp; Environmental Engineering" class="footer-logo footer-logo-utk">
+    <img src="osu_logo.png"  alt="Oregon State University" class="footer-logo footer-logo-osu">
+  </div>
+  <p class="footer-ack">
+    This material is based upon work supported by the U.S. Department of Energy, Office of Science,
+    Office of Basic Energy Sciences, Geosciences program under Award Number DE-SC0025400.
+  </p>
+</footer>
+
+<script>
+// ── App state ─────────────────────────────────────────────────────────────────
+const state = { T:50, P:10.0, theta:10, nw:'CO2', w:'water', S:100,
+                Q:1.0, diam:10.0, phi:0.22, L:40.0 };
+let debounceTimer = null;
+let lenChart = null, forceChart = null;
+
+// ── DOM helpers ───────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const fmt = (v, dec=2) => (v == null || !isFinite(v)) ? '—' : Number(v).toFixed(dec);
+
+// ── Sidebar toggle ────────────────────────────────────────────────────────────
+const sidebar = document.querySelector('aside');
+
+function syncToggleBtn() {
+  const hidden = sidebar.classList.contains('collapsed');
+  $('sidebar-toggle').innerHTML = hidden ? '&#9776;' : '&#10005;';
+  $('sidebar-toggle').title     = hidden ? 'Show controls' : 'Hide controls';
+}
+
+$('sidebar-toggle').addEventListener('click', () => {
+  sidebar.classList.toggle('collapsed');
+  syncToggleBtn();
+});
+
+// Collapse by default on mobile; keep open on desktop
+if (window.innerWidth <= 700) sidebar.classList.add('collapsed');
+syncToggleBtn();   // set correct icon on page load
+const fmtSci = (v, dec=2) => {
+  if (v == null || !isFinite(v) || v === 0) return v === 0 ? '0' : '—';
+  const e = Math.floor(Math.log10(Math.abs(v)));
+  const m = (v / Math.pow(10, e)).toFixed(dec);
+  return `${m}×10<sup>${e}</sup>`;
+};
+
+// ── Slider events ─────────────────────────────────────────────────────────────
+$('T-slider').addEventListener('input', e => { state.T = +e.target.value; $('T-val').textContent = state.T; schedule(); });
+$('P-slider').addEventListener('input', e => { state.P = +e.target.value; $('P-val').textContent = state.P.toFixed(1); schedule(); });
+$('theta-slider').addEventListener('input', e => { state.theta = +e.target.value; $('theta-val').textContent = state.theta; schedule(); });
+$('S-slider').addEventListener('input', e => { state.S = +e.target.value; $('S-val').textContent = state.S; schedule(); });
+['Q-inp','diam-inp','phi-inp','L-inp'].forEach(id => {
+  $(id).addEventListener('input', () => {
+    state.Q    = +$('Q-inp').value;
+    state.diam = +$('diam-inp').value;
+    state.phi  = +$('phi-inp').value;
+    state.L    = +$('L-inp').value;
+    schedule();
+  });
+});
+
+// ── Button events ──────────────────────────────────────────────────────────────
+$('nw-btns').addEventListener('click', e => {
+  const btn = e.target.closest('[data-nw]'); if (!btn) return;
+  state.nw = btn.dataset.nw;
+  $('nw-btns').querySelectorAll('button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active'); schedule();
+});
+$('w-btns').addEventListener('click', e => {
+  const btn = e.target.closest('[data-w]'); if (!btn) return;
+  state.w = btn.dataset.w;
+  $('w-btns').querySelectorAll('button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  $('salinity-wrap').style.display = state.w === 'brine' ? 'block' : 'none';
+  schedule();
+});
+
+// ── API ───────────────────────────────────────────────────────────────────────
+function schedule() { clearTimeout(debounceTimer); debounceTimer = setTimeout(fetchData, 230); }
+
+async function fetchData() {
+  $('spinner').style.display = 'block';
+  $('results').style.display = 'none';
+  $('error-msg').style.display = 'none';
+  const body = {
+    T_C: state.T, P_MPa: state.P, nw_fluid: state.nw, w_fluid: state.w,
+    salinity_g_L: state.w === 'brine' ? state.S : null,
+    Q_ml_hr: state.Q > 0 ? state.Q : null,
+    core_diam_mm: state.diam, porosity: state.phi, char_len_um: state.L,
+    theta_deg: state.theta,
+  };
+  try {
+    const res = await fetch('/api/calculate', { method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    if (!res.ok) throw new Error(`Server ${res.status}`);
+    const data = await res.json();
+    render(data);
+    $('results').style.display = 'block';
+  } catch(err) {
+    $('error-msg').textContent = `Error: ${err.message}`;
+    $('error-msg').style.display = 'block';
+  } finally { $('spinner').style.display = 'none'; }
+}
+
+// ── Phase badge helper ─────────────────────────────────────────────────────────
+function phaseCls(p) {
+  if (!p) return 'phase-gas';
+  const q = p.toLowerCase();
+  if (q.includes('super')) return 'phase-supercritical';
+  if (q.includes('liquid')) return 'phase-liquid';
+  if (q.includes('two')) return 'phase-two-phase';
+  return 'phase-gas';
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function render(d) {
+  const nw = d.nw, w = d.wetting, ix = d.interaction, sol = ix.solubility, fl = d.flow;
+
+  // State bar
+  $('state-bar').innerHTML = `
+    <div class="state-chip"><div class="dot" style="background:${nw.color}"></div>
+      <strong>${nw.label}</strong>&nbsp;NW</div>
+    <div style="color:var(--border)">|</div>
+    <div class="state-chip"><div class="dot" style="background:#2563eb"></div>
+      <strong>${w.label}</strong>${w.salinity_g_L > 0 ? ` · ${w.salinity_g_L} g/L` : ''}</div>
+    <div style="color:var(--border)">|</div>
+    <div class="state-chip">T = <strong>${d.T_C.toFixed(0)} °C</strong></div>
+    <div class="state-chip">P = <strong>${d.P_MPa.toFixed(1)} MPa</strong></div>
+    <div class="state-chip">θ = <strong>${state.theta}°</strong></div>
+    ${nw.phase ? `<div class="state-chip">
+      <span class="phase-badge ${phaseCls(nw.phase)}">${nw.phase}</span></div>` : ''}
+  `;
+
+  // ── Property cards ──────────────────────────────────────────────────────────
+  const nwRows = [
+    ['Density',            `${fmt(nw.density_kg_m3,1)} kg/m³`],
+    ['Dynamic viscosity',  `${fmt(nw.viscosity_uPas,2)} µPa·s`],
+    ['Isotherm. compress.',nw.compressibility_1_GPa != null ? `${fmt(nw.compressibility_1_GPa,3)} GPa⁻¹` : '—'],
+    ['Molar mass',         `${fmt(nw.Mw_g_mol,2)} g/mol`],
+    ['Phase state',        nw.phase ? `<span class="phase-badge ${phaseCls(nw.phase)}">${nw.phase}</span>` : '—'],
+  ];
+
+  const wRows = [
+    ['Density',            `${fmt(w.density_kg_m3,1)} kg/m³`],
+    ['Dynamic viscosity',  `${fmt(w.viscosity_uPas,2)} µPa·s`],
+    ['Isotherm. compress.',w.compressibility_1_GPa != null ? `${fmt(w.compressibility_1_GPa,4)} GPa⁻¹` : '—'],
+    ['Salinity',           `${w.salinity_g_L.toFixed(1)} g/L NaCl`],
+  ];
+
+  // Interaction card: IFT, solubility, diffusivity only (ratios moved to flow section)
+  const ixRows = [
+    ['Interfacial tension',   `${fmt(ix.ift_mN_m,1)} mN/m`],
+    ['Solubility (mol frac)', sol.mol_frac != null ? fmtSci(sol.mol_frac,3) : '—'],
+    ['Solubility (mg/L)',     `${fmt(sol.mg_L,1)} mg/L`],
+    ['Solubility (mmol/L)',   `${fmt(sol.mmol_L,2)} mmol/L`],
+    ['Diffusivity in water',  ix.diffusivity_m2_s != null
+      ? `${(ix.diffusivity_m2_s*1e9).toFixed(2)}×10⁻⁹ m²/s` : '—'],
+  ];
+
+  function makeCard(title, color, rows, extraSection) {
+    const rowsHtml = rows.map(([k,v]) =>
+      `<tr><td>${k}</td><td>${v}</td></tr>`
+    ).join('');
+    return `<div class="card">
+      <div class="card-head" style="background:${color}">${title}</div>
+      <table class="prop-table">${rowsHtml}${extraSection||''}</table>
+    </div>`;
+  }
+
+  // Flow & dimensionless numbers section (includes viscosity + density ratios)
+  let flowSection = '';
+  if (fl) {
+    flowSection = `
+      <tr class="section-head"><td colspan="2">Flow &amp; Dimensionless Numbers</td></tr>
+      <tr><td>Interstitial velocity</td><td>${fmt(fl.velocity_um_s,2)} µm/s</td></tr>
+      <tr><td>Ca (W injection)</td><td>${fmtSci(fl.Ca_w,2)}</td></tr>
+      <tr><td>Ca (NW injection)</td><td>${fmtSci(fl.Ca_nw,2)}</td></tr>
+      <tr><td>Bond number Bo</td><td>${fmtSci(fl.Bo,2)}</td></tr>
+      <tr><td>μ<sub>NW</sub>/μ<sub>W</sub></td><td>${fmt(ix.mobility_ratio,4)}</td></tr>
+      <tr><td>ρ<sub>W</sub>/ρ<sub>NW</sub></td><td>${fmt(ix.density_ratio,2)}</td></tr>
+    `;
+  }
+
+  // Layout: NW + W stacked on left, Interface+Transport on right
+  $('prop-grid').innerHTML = `
+    <div class="grid-props-left">
+      ${makeCard(`${nw.label} — Nonwetting Phase`, nw.color, nwRows)}
+      ${makeCard(`${w.label} — Wetting Phase`, '#0369a1', wRows)}
+    </div>
+    ${makeCard('Interface &amp; Transport', '#7c3aed', ixRows, flowSection)}
+  `;
+
+  // ── Charts ──────────────────────────────────────────────────────────────────
+  drawLenormand(fl);
+  drawForceBalance(fl);
+
+  // ── Source note ─────────────────────────────────────────────────────────────
+  $('source-note').innerHTML = `
+    <strong>Methods &amp; sources:</strong>
+    <strong>NW/W properties:</strong> CoolProp (Bell et al. 2014).
+    Brine density: Rowe &amp; Chou (1970). Brine viscosity: Mao &amp; Duan (2009).
+    <strong>Solubility:</strong> Henry's law (NIST/Sander 2015) + Krichevsky–Kasarnovsky pressure correction + Sechenov salting-out (Schumpe 1993).
+    <strong>Diffusivity:</strong> Stokes–Einstein scaling from D(25 °C) reference values.
+    <strong>IFT:</strong> ${ix.ift_source}. Salinity: +0.04 mN/m per g/L NaCl (Hebach et al. 2002).
+    <strong>Regime diagrams:</strong> Lenormand et al. (1988) J Fluid Mech; regime boundaries are approximate and depend on pore geometry.
+  `;
+}
+
+// ── Lenormand diagram ─────────────────────────────────────────────────────────
+// ── Lenormand regime diagram ──────────────────────────────────────────────────
+// Axes: x = log10(M),  y = log10(Ca)   [M = μ_injected/μ_defending]
+//
+// Each regime is defined by 3 polygon vertices (from user-supplied table).
+// Lenormand et al. (1988)  J Fluid Mech  →  solid outlines
+// Zhang et al. (2011)                    →  dashed outlines
+//
+//           Lenormand              Zhang
+//  CF:  (-4,-10)(0,-6)(4,-6)   (4,-4.1)(0.25,-4.1)(-5.5,-10)
+//  VF:  (-6,-8)(-3,-5)(-3,0)   (-0.75,0)(-0.75,-4.1)(-6,-9.45)
+//  SD:  (1,0)(1,-1.25)(4,-1.25) (0.25,0)(0.25,-2.5)(4,-2.5)
+
+// Chart axes: x = log M,  y = log Ca
+const LEN_XMIN = -6, LEN_XMAX = 4, LEN_YMIN = -10, LEN_YMAX = 0;
+
+// (log M, log Ca) closed polygon vertices — 4-point quadrilaterals
+const REGIMES = {
+  lenormand: {
+    CF: { pts:[[-4,-10],[0,-6],[4,-6],[4,-10]],         fill:'rgba(96,165,250,0.28)',  stroke:'rgba(29,78,216,0.80)',  dash:[] },
+    VF: { pts:[[-6,-8],[-3,-5],[-3,0],[-6,0]],          fill:'rgba(251,191,36,0.28)',  stroke:'rgba(146,64,14,0.80)',  dash:[] },
+    SD: { pts:[[1,0],[1,-1.25],[4,-1.25],[4,0]],        fill:'rgba(52,211,153,0.28)',  stroke:'rgba(4,120,87,0.80)',   dash:[] },
+  },
+  zhang: {
+    CF: { pts:[[4,-4.1],[0.25,-4.1],[-5.5,-10],[4,-10]],   fill:'rgba(96,165,250,0.13)',  stroke:'rgba(29,78,216,0.85)',  dash:[5,4] },
+    VF: { pts:[[-0.75,0],[-0.75,-4.1],[-6,-9.45],[-6,0]],  fill:'rgba(251,191,36,0.13)',  stroke:'rgba(146,64,14,0.85)',  dash:[5,4] },
+    SD: { pts:[[0.25,0],[0.25,-2.5],[4,-2.5],[4,0]],        fill:'rgba(52,211,153,0.13)',  stroke:'rgba(4,120,87,0.85)',   dash:[5,4] },
+  },
+};
+
+// Label position = centroid of polygon (average of all vertices)
+function centroid(pts) {
+  return [pts.reduce((s,p)=>s+p[0],0)/pts.length, pts.reduce((s,p)=>s+p[1],0)/pts.length];
+}
+
+function drawLenormand(fl) {
+  const ctx = $('lenormand-chart').getContext('2d');
+  if (lenChart) { lenChart.destroy(); lenChart = null; }
+
+  const regimePlugin = {
+    id: 'regimes',
+    beforeDraw(chart) {
+      const {ctx, scales:{x,y}} = chart;
+      const px = lm => x.getPixelForValue(lm);   // log M → pixel
+      const py = lc => y.getPixelForValue(lc);   // log Ca → pixel
+
+      function drawPolygon(pts, fill, stroke, dash) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(px(pts[0][0]), py(pts[0][1]));
+        for (let i = 1; i < pts.length; i++)
+          ctx.lineTo(px(pts[i][0]), py(pts[i][1]));
+        ctx.closePath();
+        ctx.fillStyle = fill;
+        ctx.fill();
+        ctx.setLineDash(dash);
+        ctx.lineWidth = 1.8;
+        ctx.strokeStyle = stroke;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Draw Zhang first (behind), then Lenormand on top
+      for (const key of ['CF','VF','SD']) drawPolygon(...Object.values(REGIMES.zhang[key]));
+      for (const key of ['CF','VF','SD']) drawPolygon(...Object.values(REGIMES.lenormand[key]));
+
+      // Region labels at Lenormand centroids
+      ctx.save();
+      ctx.font = 'bold 10px Segoe UI';
+      const labels = {
+        CF: { c: centroid(REGIMES.lenormand.CF.pts), color:'rgba(29,78,216,0.85)',  text:'CF' },
+        VF: { c: centroid(REGIMES.lenormand.VF.pts), color:'rgba(146,64,14,0.85)', text:'VF' },
+        SD: { c: centroid(REGIMES.lenormand.SD.pts), color:'rgba(4,120,87,0.85)',  text:'SD' },
+      };
+      for (const {c,color,text} of Object.values(labels)) {
+        ctx.fillStyle = color;
+        ctx.fillText(text, px(c[0])-8, py(c[1])+4);
+      }
+      // Small 'Z' labels at Zhang centroids
+      ctx.font = '9px Segoe UI';
+      for (const key of ['CF','VF','SD']) {
+        const c = centroid(REGIMES.zhang[key].pts);
+        ctx.fillStyle = Object.values(labels).find(l=>l.text===key).color;
+        ctx.fillText('Z-'+key, px(c[0])-10, py(c[1])+4);
+      }
+      ctx.restore();
+    }
+  };
+
+  // Data points: x = log10(M),  y = log10(Ca)
+  const datasets = [];
+  if (fl && fl.Ca_nw && fl.M_drainage) {
+    datasets.push({
+      label: 'NW injection (drainage)',
+      data: [{ x: Math.log10(fl.M_drainage), y: Math.log10(fl.Ca_nw) }],
+      backgroundColor: '#dc2626', pointRadius: 8, pointStyle: 'circle',
+    });
+  }
+  if (fl && fl.Ca_w && fl.M_imbibition) {
+    datasets.push({
+      label: 'W injection (imbibition)',
+      data: [{ x: Math.log10(fl.M_imbibition), y: Math.log10(fl.Ca_w) }],
+      backgroundColor: '#2563eb', pointRadius: 8, pointStyle: 'rectRot',
+    });
+  }
+  if (!datasets.length)
+    datasets.push({ label:'Enter flow rate to plot', data:[], backgroundColor:'transparent' });
+
+  // Dummy datasets for legend (Lenormand = solid, Zhang = dashed)
+  datasets.push(
+    { label:'Lenormand (1988)', data:[], backgroundColor:'rgba(0,0,0,0)',
+      borderColor:'rgba(71,85,105,0.8)', borderWidth:2, borderDash:[], pointRadius:0,
+      type:'line' },
+    { label:'Zhang et al. (2011)', data:[], backgroundColor:'rgba(0,0,0,0)',
+      borderColor:'rgba(71,85,105,0.8)', borderWidth:2, borderDash:[5,4], pointRadius:0,
+      type:'line' },
+  );
+
+  lenChart = new Chart(ctx, {
+    type: 'scatter',
+    plugins: [regimePlugin],
+    data: { datasets },
+    options: {
+      animation: false,
+      maintainAspectRatio: false,
+      scales: {
+        x: { title:{ display:true, text:'log₁₀(μ_injected / μ_defending)', font:{size:11} },
+             min: LEN_XMIN, max: LEN_XMAX,
+             ticks:{ stepSize:2, callback: v=>`10^${v}`, font:{size:10} } },
+        y: { title:{ display:true, text:'log₁₀(Ca)', font:{size:11} },
+             min: LEN_YMIN, max: LEN_YMAX,
+             ticks:{ stepSize:2, callback: v=>`10^${v}`, font:{size:10} } },
+      },
+      plugins: {
+        legend:{ labels:{ font:{size:10}, boxWidth:10, padding:8 } },
+        tooltip:{ callbacks:{
+          label: item => item.raw
+            ? `log M = ${item.raw.x.toFixed(2)},  log Ca = ${item.raw.y.toFixed(2)}`
+            : item.dataset.label
+        }},
+      },
+    },
+  });
+}
+
+// ── Force balance diagram ─────────────────────────────────────────────────────
+// x = Ca/Bo  (viscous / gravity)
+// y = 1/Bo   (capillary / gravity)
+// Dominant force regions: x>1 → viscous, y>1 → capillary, both <1 → gravity
+function drawForceBalance(fl) {
+  const ctx = $('force-chart').getContext('2d');
+  if (forceChart) { forceChart.destroy(); forceChart = null; }
+
+  const forcePlugin = {
+    id: 'forces',
+    beforeDraw(chart) {
+      const {ctx, chartArea:{left,right,top,bottom}, scales:{x,y}} = chart;
+      const x1 = x.getPixelForValue(0);   // log10(Ca/Bo)=0 → Ca/Bo=1
+      const y1 = y.getPixelForValue(0);   // log10(1/Bo)=0  → 1/Bo=1
+
+      ctx.save();
+      // Gravity dominated (bottom-left)
+      ctx.fillStyle = 'rgba(167,243,208,0.22)';
+      ctx.fillRect(left, y1, x1-left, bottom-y1);
+      // Viscous dominated (bottom-right)
+      ctx.fillStyle = 'rgba(253,186,116,0.22)';
+      ctx.fillRect(x1, y1, right-x1, bottom-y1);
+      // Capillary dominated (top-left)
+      ctx.fillStyle = 'rgba(196,181,253,0.22)';
+      ctx.fillRect(left, top, x1-left, y1-top);
+      // Mixed viscous + capillary (top-right)
+      ctx.fillStyle = 'rgba(147,197,253,0.20)';
+      ctx.fillRect(x1, top, right-x1, y1-top);
+
+      ctx.setLineDash([5,4]); ctx.lineWidth=1.3; ctx.strokeStyle='rgba(100,116,139,.6)';
+      ctx.beginPath(); ctx.moveTo(left,y1); ctx.lineTo(right,y1); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x1,top); ctx.lineTo(x1,bottom); ctx.stroke();
+      ctx.restore();
+
+      ctx.save(); ctx.font='10px Segoe UI'; ctx.fillStyle='rgba(71,85,105,.8)';
+      ctx.fillText('Gravity',            left+5, bottom-6);
+      ctx.fillText('Viscous',            x1+5,   bottom-6);
+      ctx.fillText('Capillary',          left+5, top+13);
+      ctx.fillText('Capillary+Viscous',  x1+5,   top+13);
+      ctx.restore();
+    }
+  };
+
+  const datasets = [];
+  if (fl && fl.Ca_Bo_nw && fl.inv_Bo) {
+    datasets.push({
+      label: 'NW injection',
+      data: [{ x: Math.log10(fl.Ca_Bo_nw), y: Math.log10(fl.inv_Bo) }],
+      backgroundColor: '#e74c3c', pointRadius: 8, pointStyle: 'circle',
+    });
+  }
+  if (fl && fl.Ca_Bo_w && fl.inv_Bo) {
+    datasets.push({
+      label: 'W injection',
+      data: [{ x: Math.log10(fl.Ca_Bo_w), y: Math.log10(fl.inv_Bo) }],
+      backgroundColor: '#2563eb', pointRadius: 8, pointStyle: 'rectRot',
+    });
+  }
+  if (!datasets.length) {
+    datasets.push({ label:'Enter flow rate to plot', data:[], backgroundColor:'transparent' });
+  }
+
+  forceChart = new Chart(ctx, {
+    type: 'scatter',
+    plugins: [forcePlugin],
+    data: { datasets },
+    options: {
+      animation: false,
+      maintainAspectRatio: false,
+      scales: {
+        x: { title:{ display:true, text:'log₁₀(Ca/Bo)  — viscous/gravity', font:{size:11} },
+             min:-8, max:4,
+             ticks:{ callback:v=>`10^${v}`, font:{size:10} } },
+        y: { title:{ display:true, text:'log₁₀(1/Bo)  — capillary/gravity', font:{size:11} },
+             min:-4, max:8,
+             ticks:{ callback:v=>`10^${v}`, font:{size:10} } },
+      },
+      plugins: {
+        legend:{ labels:{ font:{size:11}, boxWidth:12 } },
+        tooltip:{ callbacks:{
+          label: item => `(log Ca/Bo=${item.raw.x.toFixed(2)}, log 1/Bo=${item.raw.y.toFixed(2)})`
+        }},
+      },
+    },
+  });
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+fetchData();
+</script>
+</body>
+</html>
