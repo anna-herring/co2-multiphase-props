@@ -232,8 +232,8 @@
     <div id="salinity-wrap">
       <div class="num-row" style="margin-top:8px">
         <span class="param-name">NaCl concentration</span>
-        <input type="number" id="S-inp" value="100" min="1" max="350" step="1">
-        <span class="unit">g/L</span>
+        <input type="number" id="S-inp" value="1.7" min="0.1" max="6.0" step="0.1">
+        <span class="unit">mol/L</span>
       </div>
     </div>
     <div id="ki-wrap" style="display:none">
@@ -349,7 +349,7 @@
 
 <script>
 // ── App state ─────────────────────────────────────────────────────────────────
-const state = { T:50, P:10.0, theta:10, nw:'CO2', w:'water', S:100, KI:0.5,
+const state = { T:50, P:10.0, theta:10, nw:'CO2', w:'water', S:1.7, KI:0.5,
                 Q:1.0, Ca:1e-5, mode:'q', diam:10.0, phi:0.22, L:40.0 };
 let debounceTimer = null;
 let lenChart = null, forceChart = null;
@@ -438,7 +438,7 @@ async function fetchData() {
   $('error-msg').style.display = 'none';
   const body = {
     T_C: state.T, P_MPa: state.P, nw_fluid: state.nw, w_fluid: state.w,
-    salinity_g_L: state.w === 'brine'    ? state.S  : null,
+    salinity_g_L: state.w === 'brine'    ? state.S * 58.44 : null,
     ki_mol_L:     state.w === 'ki_brine' ? state.KI : null,
     Q_ml_hr:      state.mode === 'q'  && state.Q  > 0 ? state.Q  : null,
     Ca_nw_target: state.mode === 'ca' && state.Ca > 0 ? state.Ca : null,
@@ -478,7 +478,7 @@ function render(d) {
       <strong>${nw.label}</strong>&nbsp;NW</div>
     <div style="color:var(--border)">|</div>
     <div class="state-chip"><div class="dot" style="background:#2563eb"></div>
-      <strong>${w.label}</strong>${w.salinity_g_L > 0 ? ` · ${w.salinity_g_L} g/L` : ''}${w.ki_mol_L > 0 ? ` · ${w.ki_mol_L} mol/L KI` : ''}</div>
+      <strong>${w.label}</strong>${w.salinity_g_L > 0 ? ` · ${(w.salinity_g_L/58.44).toFixed(1)} mol/L NaCl` : ''}${w.ki_mol_L > 0 ? ` · ${w.ki_mol_L} mol/L KI` : ''}</div>
     <div style="color:var(--border)">|</div>
     <div class="state-chip">T = <strong>${d.T_C.toFixed(0)} °C</strong></div>
     <div class="state-chip">P = <strong>${d.P_MPa.toFixed(1)} MPa</strong></div>
