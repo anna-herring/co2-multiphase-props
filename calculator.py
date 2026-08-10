@@ -4,9 +4,16 @@ Multiphase flow & capillary trapping fluid properties calculator.
 Properties at a single (T, P) point for NW/W fluid pairs.
   - Density, viscosity, compressibility  : CoolProp
   - Brine corrections                    : Rowe & Chou (1970); Mao & Duan (2009)
-  - Solubility                            : Henry's law + Krichevsky-Kasarnovsky
+  - CO2 solubility (water + NaCl brine)   : Duan & Sun (2006) Marine Chemistry,
+        with fugacity from the Duan, Moller & Weare (1992) BWR EOS
+  - CO2 solubility (KI), H2/N2            : Henry's law + Krichevsky-Kasarnovsky
   - Diffusivity                           : Stokes-Einstein scaling from D_25 ref
   - Interfacial tension                   : 2-D interpolation of published data
+
+WARNING: CoolProp has NO "fugacity" output key, and AbstractState.fugacity(i)
+fails for pure fluids. Both failures are silent if caught, leaving an ideal-gas
+value (f = P) that is ~2.7x wrong for CO2 at 50 C / 10 MPa. Get the fugacity
+coefficient from residual properties instead -- see _fugacity_MPa below.
 """
 
 import numpy as np
@@ -214,54 +221,163 @@ def _water_vapor_pressure_MPa(T_K):
         return 10 ** (8.07131 - 1730.63 / (233.426 + T_K - 273.15)) * 133.322e-6
 
 
+def _fugacity_MPa(coolprop_name, T_K, P_MPa):
+    """
+    Fugacity [MPa] via residual Gibbs energy from CoolProp.
+    ln φ = (h_res - T·s_res) / (R·T);  f = φ·P
+    Falls back to ideal gas if CoolProp raises.
+    """
+    try:
+        AS = CP.AbstractState("HEOS", coolprop_name)
+        AS.update(CP.PT_INPUTS, P_MPa * 1e6, T_K)
+        h_res = AS.hmolar_residual()   # J/mol
+        s_res = AS.smolar_residual()   # J/(mol·K)
+        phi = np.exp((h_res - T_K * s_res) / (R * T_K))
+        return phi * P_MPa
+    except Exception:
+        return P_MPa
+
+
+_DUAN_A = (8.99288497e-2, -4.94783127e-1, 4.77922245e-2, 1.03808883e-2,
+           -2.82516861e-2, 9.49887563e-2, 5.20600880e-4, -2.93540971e-4,
+           -1.77265112e-3, -2.51101973e-5, 8.93353441e-5, 7.88998563e-5,
+           -1.66727022e-2, 1.3980, 2.96000000e-2)
+
+
+def _co2_fugacity_coeff_duan(T_K, P_MPa):
+    """
+    CO2 fugacity coefficient from the Duan, Moller & Weare (1992) BWR-type EOS,
+    as used inside Duan & Sun (2003, 2006). Must be used instead of Span &
+    Wagner: the mu0 parameterisation is calibrated against THIS EOS.
+
+    Reduced variables use the Duan reference constants Tc=304.1282 K,
+    Pc=73.773 bar. Returns phi (dimensionless).
+    """
+    a = _DUAN_A
+    Tc, Pc_bar = 304.1282, 73.773
+    Tr = T_K / Tc
+    Pr = (P_MPa * 10.0) / Pc_bar
+
+    B = a[0] + a[1] / Tr**2 + a[2] / Tr**3
+    C = a[3] + a[4] / Tr**2 + a[5] / Tr**3
+    D = a[6] + a[7] / Tr**2 + a[8] / Tr**3
+    E = a[9] + a[10] / Tr**2 + a[11] / Tr**3
+    F = a[12] / Tr**3
+    alpha, beta = a[13], a[14]
+
+    # Solve Z from  Z = 1 + B/Vr + C/Vr^2 + D/Vr^4 + E/Vr^5
+    #                 + (F/Vr^2)(beta + alpha/Vr^2) exp(-alpha/Vr^2)
+    # with Vr = Z*Tr/Pr, by fixed-point iteration on Vr.
+    Vr = Tr / Pr          # ideal-gas start
+    for _ in range(200):
+        Z = (1.0 + B / Vr + C / Vr**2 + D / Vr**4 + E / Vr**5
+             + (F / Vr**2) * (beta + alpha / Vr**2) * np.exp(-alpha / Vr**2))
+        Vr_new = Z * Tr / Pr
+        if abs(Vr_new - Vr) < 1e-12:
+            Vr = Vr_new
+            break
+        Vr = 0.5 * Vr + 0.5 * Vr_new     # damped, keeps liquid root stable
+
+    Z = Pr * Vr / Tr
+    ln_phi = (Z - 1.0 - np.log(Z)
+              + B / Vr + C / (2.0 * Vr**2) + D / (4.0 * Vr**4) + E / (5.0 * Vr**5)
+              + (F / (2.0 * alpha)) * (beta + 1.0
+                                       - (beta + 1.0 + alpha / Vr**2)
+                                       * np.exp(-alpha / Vr**2)))
+    return np.exp(ln_phi)
+
+
+def _co2_solubility_duan_sun(T_K, P_MPa, m_NaCl):
+    """
+    CO2 solubility in NaCl brine, Duan & Sun (2006) Marine Chemistry 98, 131-139.
+    doi:10.1016/j.marchem.2005.09.001
+
+    ln(m_CO2) = ln(y_CO2 * phi * P) - mu0/RT - 2*lam*m_Na - zeta*m_Na*m_Cl
+
+    Fugacity comes from the Duan (1992) EOS (NOT Span & Wagner) because the
+    mu0 polynomial was regressed against it. Returns molality [mol/kg water].
+    Valid: 273-533 K, 0-200 MPa, 0-4.5 mol/kg NaCl.
+    """
+    P_bar = P_MPa * 10.0
+
+    # Standard chemical potential mu0/RT of CO2(aq)  (Table 2, Duan & Sun 2003)
+    c = (28.9447706, -0.0354581768, -4770.67077, 1.02782768e-5, 33.8126098,
+         9.04037140e-3, -1.14934031e-3, -0.307405726, -0.0907301486,
+         9.32713393e-4, 0.0)
+    mu0 = (c[0] + c[1] * T_K + c[2] / T_K + c[3] * T_K**2 + c[4] / (630.0 - T_K)
+           + c[5] * P_bar + c[6] * P_bar * np.log(T_K) + c[7] * P_bar / T_K
+           + c[8] * P_bar / (630.0 - T_K)
+           + c[9] * P_bar**2 / (630.0 - T_K)**2)
+
+    lam = (-0.411370585 + 6.07632013e-4 * T_K + 97.5347708 / T_K
+           - 0.0237622469 * P_bar / T_K + 0.0170656236 * P_bar / (630.0 - T_K)
+           + 1.41335834e-5 * T_K * np.log(P_bar))
+
+    zeta = (3.36389723e-4 - 1.98298980e-5 * T_K
+            + 2.12220830e-3 * P_bar / T_K - 5.24873303e-3 * P_bar / (630.0 - T_K))
+
+    # Mole fraction of CO2 in the vapour phase (water vapour dilutes it)
+    Pv_bar = _water_vapor_pressure_MPa(T_K) * 10.0
+    y_co2 = max((P_bar - Pv_bar) / P_bar, 1e-6)
+
+    phi = _co2_fugacity_coeff_duan(T_K, P_MPa)
+
+    ln_m = (np.log(y_co2 * phi * P_bar) - mu0
+            - 2.0 * lam * m_NaCl - zeta * m_NaCl**2)
+    return np.exp(ln_m)
+
+
 def _solubility(nw_id, T_K, P_MPa, mu_w_Pas, S_g_L, ki_mol_L=0.0):
     """
-    Mole fraction solubility of NW gas in the wetting phase via Henry's law
-    with Krichevsky-Kasarnovsky (KK) correction for pressure.
+    Mole fraction solubility of NW gas in the wetting phase.
 
-    Returns mol fraction and mg/L.
-    Salinity effect: Sechenov coefficient from Schumpe (1993) reduces solubility.
+    CO2 (water, NaCl brine, KI brine): Duan & Sun (2006) Marine Chemistry,
+      doi:10.1016/j.marchem.2005.09.001. NaCl salting-out is intrinsic to that
+      model; KI is applied as a Sechenov factor ON TOP of the Duan & Sun
+      pure-water baseline, so freshwater and dilute KI agree in the limit.
+    H2 / N2: Henry's law + Krichevsky-Kasarnovsky pressure correction
+      + Sechenov salting-out (Schumpe 1993).
+    Fugacity from CoolProp residual Gibbs energy (not ideal gas) -- see the
+    warning in the module docstring.
     """
     sol = NW_FLUIDS[nw_id]
-    H = _henry_MPa(sol, T_K)
-    Pv = _water_vapor_pressure_MPa(T_K)
 
-    # KK correction
-    Vmp_m3 = sol["Vmp"]   # m³/mol partial molar volume
-    KK = H * np.exp(Vmp_m3 * (P_MPa - Pv) * 1e6 / (R * T_K))
+    H    = _henry_MPa(sol, T_K)
+    Pv   = _water_vapor_pressure_MPa(T_K)
+    KK   = H * np.exp(sol["Vmp"] * (P_MPa - Pv) * 1e6 / (R * T_K))
+    fug_MPa = _fugacity_MPa(sol["coolprop"], T_K, P_MPa)
+    xs_pure = fug_MPa / KK          # pure-water mole fraction (Henry+KK)
 
-    # Fugacity ≈ pressure for ideal-ish gas (H2, N2); use CoolProp for CO2
-    try:
-        fug_MPa = CP.PropsSI("fugacity", "T", T_K, "P", P_MPa * 1e6,
-                              sol["coolprop"]) * 1e-6
-    except Exception:
-        fug_MPa = P_MPa  # fallback
-
-    xs = fug_MPa / KK   # mole fraction
-
-    # Sechenov salting-out correction: xs_brine = xs_water * 10^(-Ks * c_s)
-    if ki_mol_L > 0:
-        Ks_ki = 0.006  # KI: weaker salting-out than NaCl (Schumpe 1993)
-        xs_brine = xs * 10 ** (-Ks_ki * ki_mol_L)
+    if nw_id == "CO2":
+        # ── Duan & Sun (2006): NaCl enters the model directly; KI rides on top
+        #    of the same pure-water baseline as a Sechenov factor, so that
+        #    KI -> 0 reproduces freshwater instead of jumping to Henry's law.
+        m_NaCl = 0.0 if ki_mol_L > 0 else S_g_L / (Mw_NaCl * 1000)
+        try:
+            m_co2 = _co2_solubility_duan_sun(T_K, P_MPa, m_NaCl)
+            xs_brine = m_co2 * Mw_H2O / (1.0 + m_co2 * Mw_H2O)
+        except Exception:
+            xs_brine = xs_pure          # fall back to Henry's law on error
+        if ki_mol_L > 0:
+            Ks_ki = 0.006   # KI Sechenov constant (Schumpe 1993)
+            xs_brine *= 10 ** (-Ks_ki * ki_mol_L)
+    elif ki_mol_L > 0:
+        Ks_ki = 0.006
+        xs_brine = xs_pure * 10 ** (-Ks_ki * ki_mol_L)
     else:
-        c_NaCl = S_g_L / (Mw_NaCl * 1000)   # mol/L
-        Ks = 0.01  # Schumpe (1993) average value
-        xs_brine = xs * 10 ** (-Ks * c_NaCl)
+        m_NaCl = S_g_L / (Mw_NaCl * 1000)
+        Ks = 0.01       # Schumpe (1993)
+        xs_brine = xs_pure * 10 ** (-Ks * m_NaCl)
 
-    # Convert to mg/L: ρ_water ≈ 1 kg/L
-    # c [mol/L] = x * (1 kg/L / Mw_H2O [kg/mol]) = x / Mw_H2O
-    # mg/L = c [mol/L] * Mw_gas [kg/mol] * 1e6 mg/kg
-    mg_L = xs_brine * (1.0 / Mw_H2O) * sol["Mw"] * 1e6
-
-    # mmol/L
+    mg_L   = xs_brine * (1.0 / Mw_H2O) * sol["Mw"] * 1e6
     mmol_L = xs_brine * (1.0 / Mw_H2O) * 1e3
 
     return {
-        "mol_frac":    _safe(xs_brine),
-        "mg_L":        _safe(mg_L),
-        "mmol_L":      _safe(mmol_L),
-        "henry_MPa":   _safe(H),
-        "kk_MPa":      _safe(KK),
+        "mol_frac":  _safe(xs_brine),
+        "mg_L":      _safe(mg_L),
+        "mmol_L":    _safe(mmol_L),
+        "henry_MPa": _safe(H),
+        "kk_MPa":    _safe(KK),
     }
 
 
