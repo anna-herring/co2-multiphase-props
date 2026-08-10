@@ -663,13 +663,6 @@ function drawLenormand(fl) {
       backgroundColor: '#dc2626', pointRadius: 8, pointStyle: 'circle',
     });
   }
-  if (fl && fl.Ca_w && fl.M_imbibition) {
-    datasets.push({
-      label: 'W injection (imbibition)',
-      data: [{ x: Math.log10(fl.M_imbibition), y: Math.log10(fl.Ca_w) }],
-      backgroundColor: '#2563eb', pointRadius: 8, pointStyle: 'rectRot',
-    });
-  }
   if (!datasets.length)
     datasets.push({ label:'Enter flow rate to plot', data:[], backgroundColor:'transparent' });
 
