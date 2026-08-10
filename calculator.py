@@ -19,6 +19,7 @@ kB       = 1.380649e-23    # J/K
 NA       = 6.02214076e23
 Mw_H2O   = 0.018015        # kg/mol
 Mw_NaCl  = 0.05844         # kg/mol
+Mw_KI    = 0.16601         # kg/mol
 
 # ── Fluid definitions ────────────────────────────────────────────────────────
 NW_FLUIDS = {
@@ -43,9 +44,10 @@ NW_FLUIDS = {
 }
 
 W_FLUIDS = {
-    "water":    {"label": "Freshwater",   "default_S": 0.0},
-    "seawater": {"label": "Seawater",     "default_S": 35.0},
-    "brine":    {"label": "Saline Brine", "default_S": 100.0},
+    "water":    {"label": "Freshwater",   "default_S": 0.0,   "default_ki": 0.0},
+    "seawater": {"label": "Seawater",     "default_S": 35.0,  "default_ki": 0.0},
+    "brine":    {"label": "Saline Brine", "default_S": 100.0, "default_ki": 0.0},
+    "ki_brine": {"label": "KI Brine",     "default_S": 0.0,   "default_ki": 0.5},
 }
 
 # CoolProp phase integer → label
@@ -150,13 +152,12 @@ def _nw_props(fluid_id, T_K, P_Pa):
     return out
 
 
-def _w_props(T_K, P_Pa, S_g_L):
+def _w_props(T_K, P_Pa, S_g_L, ki_mol_L=0.0):
     """Density, viscosity, compressibility of the wetting (brine) phase.
 
-    Uses CoolProp for pure water, then applies NaCl corrections.
-    Density    : Rowe & Chou (1970) approximation
-    Viscosity  : Mao & Duan (2009) simplified
-    κ_T        : CoolProp water value with small salinity correction
+    NaCl: Rowe & Chou (1970) density; Mao & Duan (2009) viscosity.
+    KI  : CRC Handbook density (~128 kg/m3 per mol/L);
+          Jones-Dole viscosity (negative B coefficient -> slight decrease).
     """
     T_C = T_K - 273.15
 
@@ -166,22 +167,31 @@ def _w_props(T_K, P_Pa, S_g_L):
         mu_w    = CP.PropsSI("V", "T", T_K, "P", P_Pa, "Water")
         kappa_w = CP.PropsSI("isothermal_compressibility", "T", T_K, "P", P_Pa, "Water")
     except Exception:
-        # Fallback for supercritical T: use steam tables via quality forcing
         rho_w, mu_w, kappa_w = np.nan, np.nan, np.nan
 
-    m = S_g_L / (Mw_NaCl * 1000)    # mol/kg NaCl (approx; valid for dilute–moderate)
+    if ki_mol_L > 0:
+        # KI density: CRC Handbook data, ~128 kg/m3 per mol/L at 25 C
+        d_rho = ki_mol_L * (128.0 - 0.04 * T_C)
+        rho_b = rho_w + d_rho if np.isfinite(rho_w) else np.nan
 
-    # Density correction (Rowe & Chou 1970; Batzle & Wang 1992)
-    d_rho = S_g_L * (0.824 - 4.66e-4 * T_C + 8.4e-7 * T_C ** 2)
-    rho_b = rho_w + d_rho if np.isfinite(rho_w) else np.nan
+        # KI viscosity: Jones-Dole; negative B -> decreases viscosity
+        ln_mu_r = ki_mol_L * (-0.090 + 1.5e-4 * (T_K - 298.15))
+        mu_b = mu_w * np.exp(ln_mu_r) if np.isfinite(mu_w) else np.nan
 
-    # Viscosity correction: Mao & Duan (2009) ln(μ_r) ≈ m*(A+B*T_K)
-    A_mao, B_mao = 1.9741e-2, -4.22e-5
-    mu_ratio = np.exp(m * (A_mao + B_mao * T_K))
-    mu_b = mu_w * mu_ratio if np.isfinite(mu_w) else np.nan
+        kappa_b = kappa_w * (1.0 - 1.5e-3 * ki_mol_L) if np.isfinite(kappa_w) else np.nan
+    else:
+        # NaCl corrections
+        m = S_g_L / (Mw_NaCl * 1000)    # mol/kg NaCl
 
-    # Compressibility: slight reduction with salinity (< 3% for seawater)
-    kappa_b = kappa_w * (1.0 - 2.6e-3 * m) if np.isfinite(kappa_w) else np.nan
+        # Density: Rowe & Chou (1970); Batzle & Wang (1992)
+        d_rho = S_g_L * (0.824 - 4.66e-4 * T_C + 8.4e-7 * T_C ** 2)
+        rho_b = rho_w + d_rho if np.isfinite(rho_w) else np.nan
+
+        # Viscosity: Mao & Duan (2009)
+        A_mao, B_mao = 1.9741e-2, -4.22e-5
+        mu_b = mu_w * np.exp(m * (A_mao + B_mao * T_K)) if np.isfinite(mu_w) else np.nan
+
+        kappa_b = kappa_w * (1.0 - 2.6e-3 * m) if np.isfinite(kappa_w) else np.nan
 
     return {
         "density_kg_m3":         _safe(rho_b),
@@ -204,7 +214,7 @@ def _water_vapor_pressure_MPa(T_K):
         return 10 ** (8.07131 - 1730.63 / (233.426 + T_K - 273.15)) * 133.322e-6
 
 
-def _solubility(nw_id, T_K, P_MPa, mu_w_Pas, S_g_L):
+def _solubility(nw_id, T_K, P_MPa, mu_w_Pas, S_g_L, ki_mol_L=0.0):
     """
     Mole fraction solubility of NW gas in the wetting phase via Henry's law
     with Krichevsky-Kasarnovsky (KK) correction for pressure.
@@ -230,10 +240,13 @@ def _solubility(nw_id, T_K, P_MPa, mu_w_Pas, S_g_L):
     xs = fug_MPa / KK   # mole fraction
 
     # Sechenov salting-out correction: xs_brine = xs_water * 10^(-Ks * c_s)
-    # Ks ≈ 0.01 (L/mol) for most gases; c_s in mol/L
-    c_NaCl = S_g_L / (Mw_NaCl * 1000)   # mol/L
-    Ks = 0.01  # Schumpe (1993) average value
-    xs_brine = xs * 10 ** (-Ks * c_NaCl)
+    if ki_mol_L > 0:
+        Ks_ki = 0.006  # KI: weaker salting-out than NaCl (Schumpe 1993)
+        xs_brine = xs * 10 ** (-Ks_ki * ki_mol_L)
+    else:
+        c_NaCl = S_g_L / (Mw_NaCl * 1000)   # mol/L
+        Ks = 0.01  # Schumpe (1993) average value
+        xs_brine = xs * 10 ** (-Ks * c_NaCl)
 
     # Convert to mg/L: ρ_water ≈ 1 kg/L
     # c [mol/L] = x * (1 kg/L / Mw_H2O [kg/mol]) = x / Mw_H2O
@@ -271,15 +284,20 @@ def _diffusivity(nw_id, T_K, mu_w_Pas):
     return _safe(D)
 
 
-def _ift(nw_id, T_C, P_MPa, S_g_L):
+def _ift(nw_id, T_C, P_MPa, S_g_L, ki_mol_L=0.0):
     """
-    Interfacial tension [mN/m] from 2-D interpolation of published data (fresh water),
-    with a salinity correction of +0.04 mN/m per g/L NaCl (Hebach et al. 2002).
+    Interfacial tension [mN/m] from 2-D interpolation of published data (fresh water).
+    NaCl correction: +0.04 mN/m per g/L (Hebach et al. 2002).
+    KI correction: -0.8 mN/m per mol/L (Weissenborn & Pugh 1996; KI is a
+    surface-active chaotrope that slightly decreases surface tension).
     """
     T_clamp = np.clip(T_C, _IFT_T[0], _IFT_T[-1])
     P_clamp = np.clip(P_MPa, _IFT_P[0], _IFT_P[-1])
     ift_fw = float(_IFT_INTERP[nw_id]([[T_clamp, P_clamp]]).flat[0])
-    ift = ift_fw + 0.04 * S_g_L   # salinity correction
+    if ki_mol_L > 0:
+        ift = ift_fw - 0.8 * ki_mol_L
+    else:
+        ift = ift_fw + 0.04 * S_g_L
     return _safe(ift)
 
 
@@ -341,7 +359,8 @@ def calculate(T_C: float, P_MPa: float, nw_id: str, w_id: str,
               salinity_g_L: float | None = None,
               Q_ml_hr: float | None = None, core_diam_mm: float = 10.0,
               porosity: float = 0.22, char_len_um: float = 40.0,
-              theta_deg: float = 10.0, Ca_nw_target: float | None = None) -> dict:
+              theta_deg: float = 10.0, Ca_nw_target: float | None = None,
+              ki_mol_L: float | None = None) -> dict:
     """Return all properties at (T_C, P_MPa) for the given NW/W fluid pair."""
     P_MPa = max(P_MPa, 0.1)   # avoid P=0 in CoolProp
     T_K   = T_C + 273.15
@@ -349,7 +368,11 @@ def calculate(T_C: float, P_MPa: float, nw_id: str, w_id: str,
 
     nw_def = NW_FLUIDS[nw_id]
     w_def  = W_FLUIDS[w_id]
-    S = w_def["default_S"] if salinity_g_L is None else float(salinity_g_L)
+    S  = w_def["default_S"]  if salinity_g_L is None else float(salinity_g_L)
+    ki = w_def["default_ki"] if ki_mol_L     is None else float(ki_mol_L)
+    # KI brine overrides NaCl salinity
+    if w_id == "ki_brine":
+        S = 0.0
 
     # ── NW phase ──────────────────────────────────────────────────────────────
     nw = _nw_props(nw_id, T_K, P_Pa)
@@ -359,16 +382,17 @@ def calculate(T_C: float, P_MPa: float, nw_id: str, w_id: str,
     nw["Mw_g_mol"] = nw_def["Mw"] * 1000
 
     # ── Wetting phase ─────────────────────────────────────────────────────────
-    w_out = _w_props(T_K, P_Pa, S)
+    w_out = _w_props(T_K, P_Pa, S, ki_mol_L=ki)
     mu_w  = w_out.pop("mu_water_Pas", np.nan)   # internal; not returned
     w_out["fluid"]       = w_id
     w_out["label"]       = w_def["label"]
     w_out["salinity_g_L"] = S
+    w_out["ki_mol_L"]    = ki
 
     # ── Interaction / transport ───────────────────────────────────────────────
-    sol   = _solubility(nw_id, T_K, P_MPa, mu_w if np.isfinite(mu_w) else 1e-3, S)
+    sol   = _solubility(nw_id, T_K, P_MPa, mu_w if np.isfinite(mu_w) else 1e-3, S, ki_mol_L=ki)
     D     = _diffusivity(nw_id, T_K, mu_w if np.isfinite(mu_w) else 1e-3)
-    ift   = _ift(nw_id, T_C, P_MPa, S)
+    ift   = _ift(nw_id, T_C, P_MPa, S, ki_mol_L=ki)
 
     # Mobility & density ratios (useful for multiphase flow)
     mu_nw_Pas   = (nw["viscosity_uPas"] or 0) * 1e-6

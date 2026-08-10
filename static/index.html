@@ -226,13 +226,21 @@
     <div class="btn-group" id="w-btns">
       <button class="active" data-w="water">Freshwater</button>
       <button data-w="seawater">Seawater<br><small style="font-weight:400;font-size:10px">35 g/L</small></button>
-      <button data-w="brine">Brine</button>
+      <button data-w="brine">NaCl Brine</button>
+      <button data-w="ki_brine">KI Brine</button>
     </div>
     <div id="salinity-wrap">
       <div class="num-row" style="margin-top:8px">
-        <span class="param-name">Salinity</span>
+        <span class="param-name">NaCl concentration</span>
         <input type="number" id="S-inp" value="100" min="1" max="350" step="1">
         <span class="unit">g/L</span>
+      </div>
+    </div>
+    <div id="ki-wrap" style="display:none">
+      <div class="num-row" style="margin-top:8px">
+        <span class="param-name">KI concentration</span>
+        <input type="number" id="KI-inp" value="0.5" min="0" max="1.5" step="0.1">
+        <span class="unit">mol/L</span>
       </div>
     </div>
   </div>
@@ -341,7 +349,7 @@
 
 <script>
 // ── App state ─────────────────────────────────────────────────────────────────
-const state = { T:50, P:10.0, theta:10, nw:'CO2', w:'water', S:100,
+const state = { T:50, P:10.0, theta:10, nw:'CO2', w:'water', S:100, KI:0.5,
                 Q:1.0, Ca:1e-5, mode:'q', diam:10.0, phi:0.22, L:40.0 };
 let debounceTimer = null;
 let lenChart = null, forceChart = null;
@@ -375,12 +383,13 @@ const fmtSci = (v, dec=2) => {
 };
 
 // ── Input events ──────────────────────────────────────────────────────────────
-['T-inp','P-inp','theta-inp','S-inp','Q-inp','diam-inp','phi-inp','L-inp'].forEach(id => {
+['T-inp','P-inp','theta-inp','S-inp','KI-inp','Q-inp','diam-inp','phi-inp','L-inp'].forEach(id => {
   $(id).addEventListener('change', () => {
     state.T     = +$('T-inp').value;
     state.P     = +$('P-inp').value;
     state.theta = +$('theta-inp').value;
     state.S     = +$('S-inp').value;
+    state.KI    = +$('KI-inp').value;
     state.Q     = +$('Q-inp').value;
     state.diam  = +$('diam-inp').value;
     state.phi   = +$('phi-inp').value;
@@ -415,7 +424,8 @@ $('w-btns').addEventListener('click', e => {
   state.w = btn.dataset.w;
   $('w-btns').querySelectorAll('button').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  $('salinity-wrap').style.display = state.w === 'brine' ? 'block' : 'none';
+  $('salinity-wrap').style.display = state.w === 'brine'    ? 'block' : 'none';
+  $('ki-wrap').style.display       = state.w === 'ki_brine' ? 'block' : 'none';
   schedule();
 });
 
@@ -428,7 +438,8 @@ async function fetchData() {
   $('error-msg').style.display = 'none';
   const body = {
     T_C: state.T, P_MPa: state.P, nw_fluid: state.nw, w_fluid: state.w,
-    salinity_g_L: state.w === 'brine' ? state.S : null,
+    salinity_g_L: state.w === 'brine'    ? state.S  : null,
+    ki_mol_L:     state.w === 'ki_brine' ? state.KI : null,
     Q_ml_hr:      state.mode === 'q'  && state.Q  > 0 ? state.Q  : null,
     Ca_nw_target: state.mode === 'ca' && state.Ca > 0 ? state.Ca : null,
     core_diam_mm: state.diam, porosity: state.phi, char_len_um: state.L,
@@ -467,7 +478,7 @@ function render(d) {
       <strong>${nw.label}</strong>&nbsp;NW</div>
     <div style="color:var(--border)">|</div>
     <div class="state-chip"><div class="dot" style="background:#2563eb"></div>
-      <strong>${w.label}</strong>${w.salinity_g_L > 0 ? ` · ${w.salinity_g_L} g/L` : ''}</div>
+      <strong>${w.label}</strong>${w.salinity_g_L > 0 ? ` · ${w.salinity_g_L} g/L` : ''}${w.ki_mol_L > 0 ? ` · ${w.ki_mol_L} mol/L KI` : ''}</div>
     <div style="color:var(--border)">|</div>
     <div class="state-chip">T = <strong>${d.T_C.toFixed(0)} °C</strong></div>
     <div class="state-chip">P = <strong>${d.P_MPa.toFixed(1)} MPa</strong></div>
