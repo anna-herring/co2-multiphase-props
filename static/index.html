@@ -232,14 +232,14 @@
     <div id="salinity-wrap">
       <div class="num-row" style="margin-top:8px">
         <span class="param-name">NaCl concentration</span>
-        <input type="number" id="S-inp" value="1.7" min="0.1" max="6.0" step="0.1">
+        <input type="number" id="S-inp" value="1.0" min="0.1" max="6.0" step="0.1">
         <span class="unit">mol/L</span>
       </div>
     </div>
     <div id="ki-wrap" style="display:none">
       <div class="num-row" style="margin-top:8px">
         <span class="param-name">KI concentration</span>
-        <input type="number" id="KI-inp" value="0.5" min="0" max="1.5" step="0.1">
+        <input type="number" id="KI-inp" value="1.0" min="0" max="1.5" step="0.1">
         <span class="unit">mol/L</span>
       </div>
     </div>
@@ -349,7 +349,7 @@
 
 <script>
 // ── App state ─────────────────────────────────────────────────────────────────
-const state = { T:50, P:10.0, theta:10, nw:'CO2', w:'water', S:1.7, KI:0.5,
+const state = { T:50, P:10.0, theta:10, nw:'CO2', w:'water', S:1.0, KI:1.0,
                 Q:1.0, Ca:1e-5, mode:'q', diam:10.0, phi:0.22, L:40.0 };
 let debounceTimer = null;
 let lenChart = null, forceChart = null;
