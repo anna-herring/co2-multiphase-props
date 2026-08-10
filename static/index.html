@@ -516,7 +516,7 @@ function render(d) {
   let flowSection = '';
   if (fl) {
     const derivedQRow = fl.derived_Q_ml_hr != null
-      ? `<tr><td>Derived flow rate Q</td><td>${fmt(fl.derived_Q_ml_hr,4)} ml/hr</td></tr>` : '';
+      ? `<tr><td>Derived flow rate Q</td><td>${fmt(fl.derived_Q_ml_hr/60,4)} ml/min</td></tr>` : '';
     flowSection = `
       <tr class="section-head"><td colspan="2">Flow &amp; Dimensionless Numbers</td></tr>
       ${derivedQRow}
