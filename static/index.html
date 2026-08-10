@@ -500,7 +500,11 @@ function render(d) {
     ['Density',            `${fmt(w.density_kg_m3,1)} kg/m³`],
     ['Dynamic viscosity',  `${fmt(w.viscosity_uPas,2)} µPa·s`],
     ['Isotherm. compress.',w.compressibility_1_GPa != null ? `${fmt(w.compressibility_1_GPa,4)} GPa⁻¹` : '—'],
-    ['Salinity',           `${w.salinity_g_L.toFixed(1)} g/L NaCl`],
+    ['Salinity', w.ki_mol_L > 0
+      ? `${w.ki_mol_L.toFixed(2)} mol/L KI`
+      : w.salinity_g_L > 0
+        ? `${(w.salinity_g_L/58.44).toFixed(2)} mol/L NaCl (${w.salinity_g_L.toFixed(1)} g/L)`
+        : '0 (freshwater)'],
   ];
 
   // Interaction card: IFT, solubility, diffusivity only (ratios moved to flow section)
