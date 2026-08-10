@@ -193,20 +193,20 @@
   <!-- T, P, θ -->
   <div class="ctrl-group">
     <label class="group-label">Conditions</label>
-    <div class="slider-row">
+    <div class="num-row">
       <span class="param-name">Temperature</span>
-      <input type="range" id="T-slider" min="20" max="200" step="1" value="50">
-      <span class="slider-val"><span id="T-val">50</span> °C</span>
+      <input type="number" id="T-inp" value="50" min="10" max="200" step="1">
+      <span class="unit">°C</span>
     </div>
-    <div class="slider-row">
+    <div class="num-row">
       <span class="param-name">Pressure</span>
-      <input type="range" id="P-slider" min="0" max="20" step="0.1" value="10">
-      <span class="slider-val"><span id="P-val">10.0</span> MPa</span>
+      <input type="number" id="P-inp" value="10" min="0" max="20" step="0.1">
+      <span class="unit">MPa</span>
     </div>
-    <div class="slider-row">
+    <div class="num-row">
       <span class="param-name">Contact angle θ</span>
-      <input type="range" id="theta-slider" min="0" max="89" step="1" value="10">
-      <span class="slider-val"><span id="theta-val">10</span> °</span>
+      <input type="number" id="theta-inp" value="10" min="0" max="89" step="1">
+      <span class="unit">°</span>
     </div>
   </div>
 
@@ -229,10 +229,10 @@
       <button data-w="brine">Brine</button>
     </div>
     <div id="salinity-wrap">
-      <div class="slider-row" style="margin-top:8px">
+      <div class="num-row" style="margin-top:8px">
         <span class="param-name">Salinity</span>
-        <input type="range" id="S-slider" min="1" max="350" step="1" value="100">
-        <span class="slider-val"><span id="S-val">100</span> g/L</span>
+        <input type="number" id="S-inp" value="100" min="1" max="350" step="1">
+        <span class="unit">g/L</span>
       </div>
     </div>
   </div>
@@ -240,10 +240,25 @@
   <!-- Core & flow parameters -->
   <div class="ctrl-group">
     <label class="group-label">Core &amp; Flow Parameters</label>
-    <div class="num-row">
+    <div style="display:flex;gap:10px;margin-bottom:10px;font-size:12px;color:var(--muted)">
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+        <input type="radio" name="flow-mode" id="mode-q" value="q" checked> Q → Ca
+      </label>
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+        <input type="radio" name="flow-mode" id="mode-ca" value="ca"> Ca → Q
+      </label>
+    </div>
+    <div class="num-row" id="q-row">
       <span class="param-name">Flow rate Q</span>
       <input type="number" id="Q-inp" value="1" min="0" step="0.1">
       <span class="unit">ml/hr</span>
+    </div>
+    <div class="num-row" id="ca-row" style="display:none">
+      <span class="param-name">Ca<sub>NW</sub> target</span>
+      <input type="text" id="Ca-inp" value="1e-5"
+             style="width:90px;padding:4px 8px;border:1px solid var(--border);
+                    border-radius:5px;font-size:13px;font-weight:600;text-align:right;">
+      <span class="unit">—</span>
     </div>
     <div class="num-row">
       <span class="param-name">Core diameter</span>
@@ -256,7 +271,7 @@
       <span class="unit">—</span>
     </div>
     <div class="num-row">
-      <span class="param-name">Char. length L</span>
+      <span class="param-name">Characteristic Length</span>
       <input type="number" id="L-inp" value="40" min="0.1" step="1">
       <span class="unit">µm</span>
     </div>
@@ -264,11 +279,15 @@
 
   <div style="flex:1"></div>
   <div style="font-size:11px;color:var(--muted);line-height:1.7">
-    Properties: CoolProp EoS<br>
-    Brine corr.: Rowe &amp; Chou (1970); Mao &amp; Duan (2009)<br>
+    <strong style="color:var(--text)">EoS validity (CoolProp):</strong><br>
+    CO₂: Span &amp; Wagner (1996) — 216–1100 K, 0–800 MPa ✓<br>
+    H₂: Leachman et al. (2009) — 14–1000 K, 0–2000 MPa ✓<br>
+    N₂: Span et al. (2000) — 63–2000 K, 0–2200 MPa ✓<br>
+    Note: CO₂ below T<sub>c</sub>=31.1 °C may be liquid/two-phase<br>
+    IFT tables: 10–200 °C (10–20 °C extrapolated)<br>
+    Brine: Rowe &amp; Chou (1970); Mao &amp; Duan (2009)<br>
     Solubility: Henry + KK correction<br>
     Diffusivity: Stokes–Einstein<br>
-    IFT: tabulated literature data<br>
     Diagrams: Lenormand et al. (1988)
   </div>
 </aside>
@@ -323,7 +342,7 @@
 <script>
 // ── App state ─────────────────────────────────────────────────────────────────
 const state = { T:50, P:10.0, theta:10, nw:'CO2', w:'water', S:100,
-                Q:1.0, diam:10.0, phi:0.22, L:40.0 };
+                Q:1.0, Ca:1e-5, mode:'q', diam:10.0, phi:0.22, L:40.0 };
 let debounceTimer = null;
 let lenChart = null, forceChart = null;
 
@@ -355,17 +374,31 @@ const fmtSci = (v, dec=2) => {
   return `${m}×10<sup>${e}</sup>`;
 };
 
-// ── Slider events ─────────────────────────────────────────────────────────────
-$('T-slider').addEventListener('input', e => { state.T = +e.target.value; $('T-val').textContent = state.T; schedule(); });
-$('P-slider').addEventListener('input', e => { state.P = +e.target.value; $('P-val').textContent = state.P.toFixed(1); schedule(); });
-$('theta-slider').addEventListener('input', e => { state.theta = +e.target.value; $('theta-val').textContent = state.theta; schedule(); });
-$('S-slider').addEventListener('input', e => { state.S = +e.target.value; $('S-val').textContent = state.S; schedule(); });
-['Q-inp','diam-inp','phi-inp','L-inp'].forEach(id => {
-  $(id).addEventListener('input', () => {
-    state.Q    = +$('Q-inp').value;
-    state.diam = +$('diam-inp').value;
-    state.phi  = +$('phi-inp').value;
-    state.L    = +$('L-inp').value;
+// ── Input events ──────────────────────────────────────────────────────────────
+['T-inp','P-inp','theta-inp','S-inp','Q-inp','diam-inp','phi-inp','L-inp'].forEach(id => {
+  $(id).addEventListener('change', () => {
+    state.T     = +$('T-inp').value;
+    state.P     = +$('P-inp').value;
+    state.theta = +$('theta-inp').value;
+    state.S     = +$('S-inp').value;
+    state.Q     = +$('Q-inp').value;
+    state.diam  = +$('diam-inp').value;
+    state.phi   = +$('phi-inp').value;
+    state.L     = +$('L-inp').value;
+    schedule();
+  });
+});
+$('Ca-inp').addEventListener('change', () => {
+  state.Ca = parseFloat($('Ca-inp').value) || 0;
+  schedule();
+});
+
+// ── Mode toggle ───────────────────────────────────────────────────────────────
+document.querySelectorAll('input[name="flow-mode"]').forEach(r => {
+  r.addEventListener('change', () => {
+    state.mode = r.value;
+    $('q-row').style.display  = state.mode === 'q'  ? '' : 'none';
+    $('ca-row').style.display = state.mode === 'ca' ? '' : 'none';
     schedule();
   });
 });
@@ -396,7 +429,8 @@ async function fetchData() {
   const body = {
     T_C: state.T, P_MPa: state.P, nw_fluid: state.nw, w_fluid: state.w,
     salinity_g_L: state.w === 'brine' ? state.S : null,
-    Q_ml_hr: state.Q > 0 ? state.Q : null,
+    Q_ml_hr:      state.mode === 'q'  && state.Q  > 0 ? state.Q  : null,
+    Ca_nw_target: state.mode === 'ca' && state.Ca > 0 ? state.Ca : null,
     core_diam_mm: state.diam, porosity: state.phi, char_len_um: state.L,
     theta_deg: state.theta,
   };
@@ -481,8 +515,11 @@ function render(d) {
   // Flow & dimensionless numbers section (includes viscosity + density ratios)
   let flowSection = '';
   if (fl) {
+    const derivedQRow = fl.derived_Q_ml_hr != null
+      ? `<tr><td>Derived flow rate Q</td><td>${fmt(fl.derived_Q_ml_hr,4)} ml/hr</td></tr>` : '';
     flowSection = `
       <tr class="section-head"><td colspan="2">Flow &amp; Dimensionless Numbers</td></tr>
+      ${derivedQRow}
       <tr><td>Interstitial velocity</td><td>${fmt(fl.velocity_um_s,2)} µm/s</td></tr>
       <tr><td>Ca (W injection)</td><td>${fmtSci(fl.Ca_w,2)}</td></tr>
       <tr><td>Ca (NW injection)</td><td>${fmtSci(fl.Ca_nw,2)}</td></tr>

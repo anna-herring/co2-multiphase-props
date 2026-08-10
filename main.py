@@ -14,12 +14,13 @@ async def ngrok_skip(request, call_next):
     return response
 
 class CalcRequest(BaseModel):
-    T_C:           float = Field(50.0, ge=20.0, le=200.0)
+    T_C:           float = Field(50.0, ge=10.0, le=200.0)
     P_MPa:         float = Field(10.0, ge=0.0,  le=20.0)
     nw_fluid:      str   = "CO2"
     w_fluid:       str   = "water"
     salinity_g_L:  Optional[float] = Field(None, ge=0.0, le=350.0)
     Q_ml_hr:       Optional[float] = Field(None, ge=0.0)
+    Ca_nw_target:  Optional[float] = Field(None, ge=0.0)
     core_diam_mm:  float = Field(10.0, ge=0.1, le=100.0)
     porosity:      float = Field(0.22, ge=0.01, le=0.99)
     char_len_um:   float = Field(40.0, ge=0.1, le=10000.0)
@@ -44,7 +45,7 @@ def calculate(req: CalcRequest):
                                 req.w_fluid, req.salinity_g_L,
                                 req.Q_ml_hr, req.core_diam_mm,
                                 req.porosity, req.char_len_um,
-                                req.theta_deg)
+                                req.theta_deg, req.Ca_nw_target)
 
 _static = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 app.mount("/", StaticFiles(directory=_static, html=True), name="static")

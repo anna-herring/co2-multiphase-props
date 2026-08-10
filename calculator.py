@@ -55,13 +55,15 @@ _PHASE = {0: "Liquid", 1: "Supercritical Fluid", 2: "Supercritical Fluid",
 # ── IFT tables (mN/m) ────────────────────────────────────────────────────────
 # Pressure [MPa] and temperature [°C] grids for interpolation
 _IFT_P = np.array([0.1, 1.0, 2.5, 5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0])
-_IFT_T = np.array([20., 30., 40., 50., 60., 75., 100., 150., 200.])
+_IFT_T = np.array([10., 20., 30., 40., 50., 60., 75., 100., 150., 200.])
 
 # CO2-water IFT [mN/m]
 # Hebach et al. (2002) J Phys Chem; Georgiadis et al. (2010) J Supercrit Fluids;
 # Chiquet et al. (2007) Int J Greenh Gas Control; Bikkina et al. (2011);
 # Pereira et al. (2016) J Chem Thermodyn
+# 10 °C row: linear extrapolation from 20–30 °C gradient; pure-water anchor 74.2 mN/m
 _IFT_CO2 = np.array([
+    [74.4, 69.9, 64.0, 53.1, 43.2, 37.2, 33.7, 30.9, 29.1, 28.0],
     [72.8, 68.2, 62.5, 51.8, 42.1, 36.2, 32.8, 30.2, 28.6, 27.6],
     [71.2, 66.5, 61.0, 50.5, 41.0, 35.2, 31.9, 29.5, 28.1, 27.2],
     [69.0, 64.2, 58.5, 48.0, 38.5, 32.5, 29.5, 27.3, 26.1, 25.5],
@@ -76,7 +78,9 @@ _IFT_CO2 = np.array([
 # H2-water IFT [mN/m]
 # Chow et al. (2018) J Chem Eng Data; Hashemi et al. (2021) Int J Hydrogen Energy;
 # Yekeen et al. (2021) J Pet Sci Eng; Pan et al. (2021)
+# 10 °C row: extrapolated; H2 effect on IFT is weak, pure-water anchor 74.2 mN/m
 _IFT_H2 = np.array([
+    [74.4, 73.8, 73.1, 72.0, 70.8, 69.8, 68.9, 68.1, 67.4, 66.8],
     [72.8, 72.2, 71.5, 70.4, 69.2, 68.2, 67.3, 66.5, 65.8, 65.2],
     [71.2, 70.6, 69.9, 68.8, 67.6, 66.6, 65.7, 64.9, 64.2, 63.6],
     [69.0, 68.4, 67.7, 66.6, 65.4, 64.4, 63.5, 62.7, 62.0, 61.4],
@@ -91,7 +95,9 @@ _IFT_H2 = np.array([
 # N2-water IFT [mN/m]
 # Yan et al. (2001) J Chem Eng Data; Li et al. (2012) J Chem Thermodyn;
 # Kashefi et al. (2016) Fluid Phase Equilib
+# 10 °C row: extrapolated; N2 effect on IFT is weak, pure-water anchor 74.2 mN/m
 _IFT_N2 = np.array([
+    [74.4, 74.1, 73.6, 72.9, 72.1, 71.4, 70.7, 70.1, 69.5, 69.0],
     [72.8, 72.5, 72.0, 71.3, 70.5, 69.8, 69.1, 68.5, 67.9, 67.4],
     [71.2, 70.9, 70.4, 69.7, 68.9, 68.2, 67.5, 66.9, 66.3, 65.8],
     [69.0, 68.7, 68.2, 67.5, 66.7, 66.0, 65.3, 64.7, 64.1, 63.6],
@@ -335,7 +341,7 @@ def calculate(T_C: float, P_MPa: float, nw_id: str, w_id: str,
               salinity_g_L: float | None = None,
               Q_ml_hr: float | None = None, core_diam_mm: float = 10.0,
               porosity: float = 0.22, char_len_um: float = 40.0,
-              theta_deg: float = 10.0) -> dict:
+              theta_deg: float = 10.0, Ca_nw_target: float | None = None) -> dict:
     """Return all properties at (T_C, P_MPa) for the given NW/W fluid pair."""
     P_MPa = max(P_MPa, 0.1)   # avoid P=0 in CoolProp
     T_K   = T_C + 273.15
@@ -387,6 +393,17 @@ def calculate(T_C: float, P_MPa: float, nw_id: str, w_id: str,
         "buoyancy_N_m3":    buoyancy_N_m3,
     }
 
+    # ── If Ca target supplied, derive Q from it ───────────────────────────────
+    derived_Q = None
+    if (Ca_nw_target is not None and Ca_nw_target > 0
+            and ift and ift > 0 and mu_nw_Pas and mu_nw_Pas > 0):
+        cos_theta = max(np.cos(np.radians(theta_deg)), 1e-9)
+        A_m2 = np.pi * (core_diam_mm * 0.5e-3) ** 2
+        v_m_s = Ca_nw_target * (ift * 1e-3) * cos_theta / mu_nw_Pas
+        derived_Q = v_m_s * A_m2 * porosity * 1e6 * 3600   # m³/s → ml/hr
+        if Q_ml_hr is None:
+            Q_ml_hr = derived_Q
+
     # ── Flow & dimensionless numbers (optional) ───────────────────────────────
     flow = None
     if (Q_ml_hr is not None and ift and ift > 0
@@ -398,11 +415,12 @@ def calculate(T_C: float, P_MPa: float, nw_id: str, w_id: str,
             nw["density_kg_m3"],  w_out["density_kg_m3"],
             ift, theta_deg,
         )
-        flow["Q_ml_hr"]      = Q_ml_hr
-        flow["core_diam_mm"] = core_diam_mm
-        flow["porosity"]     = porosity
-        flow["char_len_um"]  = char_len_um
-        flow["theta_deg"]    = theta_deg
+        flow["Q_ml_hr"]         = Q_ml_hr
+        flow["derived_Q_ml_hr"] = _safe(derived_Q) if derived_Q is not None else None
+        flow["core_diam_mm"]    = core_diam_mm
+        flow["porosity"]        = porosity
+        flow["char_len_um"]     = char_len_um
+        flow["theta_deg"]       = theta_deg
 
     return {
         "T_C":    T_C,
