@@ -248,12 +248,15 @@
   <!-- Core & flow parameters -->
   <div class="ctrl-group">
     <label class="group-label">Core &amp; Flow Parameters</label>
-    <div style="display:flex;gap:10px;margin-bottom:10px;font-size:12px;color:var(--muted)">
+    <div style="display:flex;flex-wrap:wrap;gap:6px 12px;margin-bottom:10px;font-size:12px;color:var(--muted)">
       <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
         <input type="radio" name="flow-mode" id="mode-q" value="q" checked> Q → Ca
       </label>
       <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
-        <input type="radio" name="flow-mode" id="mode-ca" value="ca"> Ca → Q
+        <input type="radio" name="flow-mode" id="mode-ca-nw" value="ca_nw"> Ca<sub>NW</sub> → Q
+      </label>
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+        <input type="radio" name="flow-mode" id="mode-ca-w" value="ca_w"> Ca<sub>W</sub> → Q
       </label>
     </div>
     <div class="num-row" id="q-row">
@@ -262,7 +265,7 @@
       <span class="unit">ml/hr</span>
     </div>
     <div class="num-row" id="ca-row" style="display:none">
-      <span class="param-name">Ca<sub>NW</sub> target</span>
+      <span class="param-name" id="ca-label">Ca<sub>NW</sub> target</span>
       <input type="text" id="Ca-inp" value="1e-5"
              style="width:90px;padding:4px 8px;border:1px solid var(--border);
                     border-radius:5px;font-size:13px;font-weight:600;text-align:right;">
@@ -403,11 +406,16 @@ $('Ca-inp').addEventListener('change', () => {
 });
 
 // ── Mode toggle ───────────────────────────────────────────────────────────────
+// 'q' = flow rate in, Ca out.  'ca_nw'/'ca_w' = target Ca in, flow rate out.
+// The Ca box is shared; only its label changes with the injected phase.
 document.querySelectorAll('input[name="flow-mode"]').forEach(r => {
   r.addEventListener('change', () => {
     state.mode = r.value;
-    $('q-row').style.display  = state.mode === 'q'  ? '' : 'none';
-    $('ca-row').style.display = state.mode === 'ca' ? '' : 'none';
+    const isCa = state.mode !== 'q';
+    $('q-row').style.display  = isCa ? 'none' : '';
+    $('ca-row').style.display = isCa ? '' : 'none';
+    $('ca-label').innerHTML = state.mode === 'ca_w'
+      ? 'Ca<sub>W</sub> target' : 'Ca<sub>NW</sub> target';
     schedule();
   });
 });
@@ -440,8 +448,9 @@ async function fetchData() {
     T_C: state.T, P_MPa: state.P, nw_fluid: state.nw, w_fluid: state.w,
     salinity_g_L: state.w === 'brine'    ? state.S * 58.44 : null,
     ki_mol_L:     state.w === 'ki_brine' ? state.KI : null,
-    Q_ml_hr:      state.mode === 'q'  && state.Q  > 0 ? state.Q  : null,
-    Ca_nw_target: state.mode === 'ca' && state.Ca > 0 ? state.Ca : null,
+    Q_ml_hr:      state.mode === 'q'     && state.Q  > 0 ? state.Q  : null,
+    Ca_nw_target: state.mode === 'ca_nw' && state.Ca > 0 ? state.Ca : null,
+    Ca_w_target:  state.mode === 'ca_w'  && state.Ca > 0 ? state.Ca : null,
     core_diam_mm: state.diam, porosity: state.phi, char_len_um: state.L,
     theta_deg: state.theta,
   };
@@ -531,7 +540,10 @@ function render(d) {
   let flowSection = '';
   if (fl) {
     // Flow rate: lead with ml/hr to match the input box, ml/min alongside.
-    const qLabel = fl.derived_Q_ml_hr != null ? 'Derived flow rate Q' : 'Flow rate Q';
+    const qLabel = fl.derived_Q_ml_hr == null ? 'Flow rate Q'
+      : fl.derived_from === 'ca_w' || fl.derived_from === 'Ca_w'
+        ? 'Derived flow rate Q (from Ca<sub>W</sub>)'
+        : 'Derived flow rate Q (from Ca<sub>NW</sub>)';
     const qRow = fl.Q_ml_hr != null
       ? `<tr><td>${qLabel}</td><td>${fmt(fl.Q_ml_hr,4)} ml/hr (${fmt(fl.Q_ml_hr/60,4)} ml/min)</td></tr>` : '';
     flowSection = `

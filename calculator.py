@@ -476,7 +476,8 @@ def calculate(T_C: float, P_MPa: float, nw_id: str, w_id: str,
               Q_ml_hr: float | None = None, core_diam_mm: float = 10.0,
               porosity: float = 0.22, char_len_um: float = 40.0,
               theta_deg: float = 10.0, Ca_nw_target: float | None = None,
-              ki_mol_L: float | None = None) -> dict:
+              ki_mol_L: float | None = None,
+              Ca_w_target: float | None = None) -> dict:
     """Return all properties at (T_C, P_MPa) for the given NW/W fluid pair."""
     P_MPa = max(P_MPa, 0.1)   # avoid P=0 in CoolProp
     T_K   = T_C + 273.15
@@ -533,16 +534,34 @@ def calculate(T_C: float, P_MPa: float, nw_id: str, w_id: str,
         "buoyancy_N_m3":    buoyancy_N_m3,
     }
 
-    # ── If Ca target supplied, derive Q from it ───────────────────────────────
-    derived_Q = None
-    if (Ca_nw_target is not None and Ca_nw_target > 0
-            and ift and ift > 0 and mu_nw_Pas and mu_nw_Pas > 0):
+    # ── If a Ca target is supplied, derive Q from it ──────────────────────────
+    # Ca = v·μ_injected/(σ·cos θ), so the viscosity used to invert for v is the
+    # INJECTED phase: μ_NW for drainage (Ca_NW), μ_W for imbibition (Ca_W).
+    # NW takes precedence if both are somehow supplied.
+    # Use the SAME viscosities compute_flow uses, so the returned Ca reproduces
+    # the target exactly. Note mu_w_Pas above is the pure-water viscosity (for
+    # solubility/diffusivity); the wetting phase in the flow calculation is the
+    # brine, whose viscosity differs once salt is present.
+    mu_w_flow_Pas = (w_out.get("viscosity_uPas") or 0) * 1e-6
+
+    derived_Q    = None
+    derived_from = None
+    if Ca_nw_target is not None and Ca_nw_target > 0:
+        ca_target, mu_inj, derived_from = Ca_nw_target, mu_nw_Pas, "Ca_nw"
+    elif Ca_w_target is not None and Ca_w_target > 0:
+        ca_target, mu_inj, derived_from = Ca_w_target, mu_w_flow_Pas, "Ca_w"
+    else:
+        ca_target, mu_inj = None, None
+
+    if ca_target is not None and ift and ift > 0 and mu_inj and mu_inj > 0:
         cos_theta = max(np.cos(np.radians(theta_deg)), 1e-9)
         A_m2 = np.pi * (core_diam_mm * 0.5e-3) ** 2
-        v_m_s = Ca_nw_target * (ift * 1e-3) * cos_theta / mu_nw_Pas
+        v_m_s = ca_target * (ift * 1e-3) * cos_theta / mu_inj
         derived_Q = v_m_s * A_m2 * porosity * 1e6 * 3600   # m³/s → ml/hr
         if Q_ml_hr is None:
             Q_ml_hr = derived_Q
+    else:
+        derived_from = None
 
     # ── Flow & dimensionless numbers (optional) ───────────────────────────────
     flow = None
@@ -557,6 +576,7 @@ def calculate(T_C: float, P_MPa: float, nw_id: str, w_id: str,
         )
         flow["Q_ml_hr"]         = Q_ml_hr
         flow["derived_Q_ml_hr"] = _safe(derived_Q) if derived_Q is not None else None
+        flow["derived_from"]    = derived_from   # "Ca_nw" | "Ca_w" | None
         flow["core_diam_mm"]    = core_diam_mm
         flow["porosity"]        = porosity
         flow["char_len_um"]     = char_len_um
