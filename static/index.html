@@ -530,11 +530,13 @@ function render(d) {
   // Flow & dimensionless numbers section (includes viscosity + density ratios)
   let flowSection = '';
   if (fl) {
-    const derivedQRow = fl.derived_Q_ml_hr != null
-      ? `<tr><td>Derived flow rate Q</td><td>${fmt(fl.derived_Q_ml_hr/60,4)} ml/min</td></tr>` : '';
+    // Flow rate: lead with ml/hr to match the input box, ml/min alongside.
+    const qLabel = fl.derived_Q_ml_hr != null ? 'Derived flow rate Q' : 'Flow rate Q';
+    const qRow = fl.Q_ml_hr != null
+      ? `<tr><td>${qLabel}</td><td>${fmt(fl.Q_ml_hr,4)} ml/hr (${fmt(fl.Q_ml_hr/60,4)} ml/min)</td></tr>` : '';
     flowSection = `
       <tr class="section-head"><td colspan="2">Flow &amp; Dimensionless Numbers</td></tr>
-      ${derivedQRow}
+      ${qRow}
       <tr><td>Interstitial velocity</td><td>${fmt(fl.velocity_um_s,2)} µm/s</td></tr>
       <tr><td>Ca (W injection)</td><td>${fmtSci(fl.Ca_w,2)}</td></tr>
       <tr><td>Ca (NW injection)</td><td>${fmtSci(fl.Ca_nw,2)}</td></tr>
