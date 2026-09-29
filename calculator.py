@@ -39,18 +39,10 @@ NW_FLUIDS = {
         "label": "CO₂",  "color": "#e74c3c",
         "Tc": 304.13,    "Pc": 7.377e6,
     },
-    "H2": {
-        "coolprop": "Hydrogen", "Mw": 0.00202, "Vmp": 26.7e-6,
-        "D25": 5.11e-9,  "NIST_Hcp": 0.000078, "H_dT": 495,
-        "label": "H₂",   "color": "#2980b9",
-        "Tc": 33.15,     "Pc": 1.296e6,
-    },
-    "N2": {
-        "coolprop": "Nitrogen", "Mw": 0.02802, "Vmp": 34.05e-6,
-        "D25": 2.61e-9,  "NIST_Hcp": 0.000600, "H_dT": 1300,
-        "label": "N₂",   "color": "#27ae60",
-        "Tc": 126.19,    "Pc": 3.396e6,
-    },
+    # H2 and N2 were removed 2026-09-29 (CO2-only tool). Their IFT tables,
+    # Henry constants and solubility path are all still present below, so
+    # restoring them means re-adding their entries here, to _IFT_INTERP and
+    # to IFT_SOURCES -- nothing else was deleted.
 }
 
 W_FLUIDS = {
@@ -124,16 +116,10 @@ _IFT_N2 = np.array([
 _IFT_INTERP = {
     "CO2": RegularGridInterpolator((_IFT_T, _IFT_P), _IFT_CO2, method="linear",
                                     bounds_error=False, fill_value=None),
-    "H2":  RegularGridInterpolator((_IFT_T, _IFT_P), _IFT_H2,  method="linear",
-                                    bounds_error=False, fill_value=None),
-    "N2":  RegularGridInterpolator((_IFT_T, _IFT_P), _IFT_N2,  method="linear",
-                                    bounds_error=False, fill_value=None),
 }
 
 IFT_SOURCES = {
     "CO2": "Hebach et al. (2002); Georgiadis et al. (2010); Chiquet et al. (2007)",
-    "H2":  "Chow et al. (2018); Hashemi et al. (2021); Yekeen et al. (2021)",
-    "N2":  "Yan et al. (2001); Li et al. (2012); Kashefi et al. (2016)",
 }
 
 # ── Helper functions ──────────────────────────────────────────────────────────
@@ -532,6 +518,10 @@ def _ift(nw_id, T_C, P_MPa, S_g_L, ki_mol_L=0.0):
     KI correction: -0.8 mN/m per mol/L (Weissenborn & Pugh 1996; KI is a
     surface-active chaotrope that slightly decreases surface tension).
     """
+    # NOTE: clamped, NOT extrapolated. Outside the table the value is held at
+    # the nearest edge, so it stops being a measurement -- callers should use
+    # ift_out_of_range() and say so. This matters now that the pressure limit
+    # reaches 40 MPa (for the deeper CCS sites) while the table stops at 20.
     T_clamp = np.clip(T_C, _IFT_T[0], _IFT_T[-1])
     P_clamp = np.clip(P_MPa, _IFT_P[0], _IFT_P[-1])
     ift_fw = float(_IFT_INTERP[nw_id]([[T_clamp, P_clamp]]).flat[0])
@@ -540,6 +530,16 @@ def _ift(nw_id, T_C, P_MPa, S_g_L, ki_mol_L=0.0):
     else:
         ift = ift_fw + 0.04 * S_g_L
     return _safe(ift)
+
+
+def ift_out_of_range(T_C, P_MPa):
+    """
+    True when (T, P) falls outside the measured IFT table, i.e. _ift() has
+    clamped to an edge value and the returned IFT is no longer interpolated
+    from data. Table covers 10-200 °C and 0.1-20 MPa.
+    """
+    return bool(T_C < _IFT_T[0] or T_C > _IFT_T[-1]
+                or P_MPa < _IFT_P[0] or P_MPa > _IFT_P[-1])
 
 
 # ── Flow-derived dimensionless numbers ───────────────────────────────────────
@@ -600,10 +600,8 @@ def compute_flow(Q_ml_hr: float, diam_mm: float, porosity: float,
 # brine salt corrections are deliberately not applied here, because they touch
 # only 5 of the 12 properties and a mixed surface would be mislabelled.
 SURFACE_FLUIDS = {
-    "CO2":   {"coolprop": "CO2",      "label": "CO₂",         "color": "#e74c3c"},
-    "H2":    {"coolprop": "Hydrogen", "label": "H₂",          "color": "#2980b9"},
-    "N2":    {"coolprop": "Nitrogen", "label": "N₂",          "color": "#27ae60"},
-    "water": {"coolprop": "Water",    "label": "Water (pure)", "color": "#0369a1"},
+    "CO2":   {"coolprop": "CO2",   "label": "CO₂",          "color": "#e74c3c"},
+    "water": {"coolprop": "Water", "label": "Water (pure)", "color": "#0369a1"},
 }
 
 
@@ -958,6 +956,7 @@ def calculate(T_C: float, P_MPa: float, nw_id: str, w_id: str,
     interaction = {
         "ift_mN_m":        ift,
         "ift_source":      IFT_SOURCES[nw_id],
+        "ift_out_of_range": ift_out_of_range(T_C, P_MPa),
         "solubility":      sol,
         "diffusivity_m2_s": D,
         "mobility_ratio":   mobility_ratio,

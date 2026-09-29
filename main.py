@@ -15,7 +15,11 @@ async def ngrok_skip(request, call_next):
 
 class CalcRequest(BaseModel):
     T_C:           float = Field(50.0, ge=10.0, le=200.0)
-    P_MPa:         float = Field(10.0, ge=0.0,  le=20.0)
+    # Upper limit raised 20 -> 40 MPa so every CCS site on the phase diagram
+    # is reachable by clicking it (Snohvit sits at 33 MPa). The IFT table only
+    # covers 0.1-20 MPa, so above that the IFT is clamped and the response
+    # carries interaction.ift_out_of_range = true.
+    P_MPa:         float = Field(10.0, ge=0.0,  le=40.0)
     nw_fluid:      str   = "CO2"
     w_fluid:       str   = "water"
     salinity_g_L:  Optional[float] = Field(None, ge=0.0, le=350.0)

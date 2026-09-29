@@ -261,7 +261,7 @@
     </div>
     <div class="num-row">
       <span class="param-name">Pressure</span>
-      <input type="number" id="P-inp" value="10" min="0" max="20" step="0.1">
+      <input type="number" id="P-inp" value="10" min="0" max="40" step="0.1">
       <span class="unit">MPa</span>
     </div>
     <div class="num-row">
@@ -271,13 +271,11 @@
     </div>
   </div>
 
-  <!-- NW fluid -->
+  <!-- NW fluid: CO2 only -->
   <div class="ctrl-group">
     <label class="group-label">Nonwetting Phase</label>
     <div class="btn-group" id="nw-btns">
       <button class="nw-co2 active" data-nw="CO2">CO₂</button>
-      <button class="nw-h2"        data-nw="H2">H₂</button>
-      <button class="nw-n2"        data-nw="N2">N₂</button>
     </div>
   </div>
 
@@ -382,13 +380,6 @@
 
       <div class="grid-props" id="prop-grid"></div>
 
-      <div class="card" style="margin-top:14px">
-        <div class="card-head" style="background:#0f766e">
-          Field CCS Sites — Reservoir Conditions
-        </div>
-        <div id="ccs-table" style="padding:12px 14px 14px"></div>
-      </div>
-
       <div class="source-note" id="source-note"></div>
     </div>
 
@@ -409,7 +400,8 @@
         <div class="chart-wrap"><canvas id="force-chart" height="310"></canvas></div>
         <div style="padding:0 14px 10px;font-size:10.5px;color:var(--muted)">
           x = Ca/Bo (viscous/gravity), y = 1/Bo (capillary/gravity). Both log scale.
-          Dominant force regions separated by Ca/Bo = 1 and 1/Bo = 1.
+          Quadrants are bounded by Ca/Bo = 1 and 1/Bo = 1; the corner labels name
+          the dominant force in each.
         </div>
       </div>
     </div>
@@ -420,8 +412,11 @@
         Field CCS Sites on the CO₂ Phase Diagram
       </div>
       <div id="ccs-plot" style="width:100%;height:520px"></div>
+      <div id="ccs-click-note"
+           style="padding:6px 14px 0;font-size:11px;color:var(--text);line-height:1.5"></div>
       <div id="ccs-note"
-           style="padding:0 14px 14px;font-size:10.5px;color:var(--muted);line-height:1.6"></div>
+           style="padding:6px 14px 10px;font-size:10.5px;color:var(--muted);line-height:1.6"></div>
+      <div id="ccs-table" style="padding:0 14px 14px"></div>
     </div>
 
     <!-- Thermodynamic property surface -->
@@ -648,7 +643,10 @@ function render(d) {
 
   // Interaction card: IFT, solubility, diffusivity only (ratios moved to flow section)
   const ixRows = [
-    ['Interfacial tension',   `${fmt(ix.ift_mN_m,1)} mN/m`],
+    ['Interfacial tension' + (ix.ift_out_of_range
+      ? ' <span class="uncorr" title="Outside the measured IFT table (10–200 °C, 0.1–20 MPa) — held at the nearest edge value, not interpolated from data">clamped</span>'
+      : ''),
+      `${fmt(ix.ift_mN_m,1)} mN/m`],
     ['Solubility (mol frac)', sol.mol_frac != null ? fmtSci(sol.mol_frac,3) : '—'],
     ['Solubility (mg/L)',     `${fmt(sol.mg_L,1)} mg/L`],
     ['Solubility (mmol/L)',   `${fmt(sol.mmol_L,2)} mmol/L`],
@@ -823,6 +821,11 @@ function drawLenormand(fl) {
       const px = lm => x.getPixelForValue(lm);   // log M → pixel
       const py = lc => y.getPixelForValue(lc);   // log Ca → pixel
 
+      // Region FILLS removed 2026-09-29: the labels identify the regions and
+      // the shading competed with the data point. The boundaries are kept --
+      // they are the published Lenormand / Zhang regime limits, not decoration.
+      // `fill` stays in the signature because callers spread REGIMES entries
+      // positionally; it is deliberately unused.
       function drawPolygon(pts, fill, stroke, dash) {
         ctx.save();
         ctx.beginPath();
@@ -830,8 +833,6 @@ function drawLenormand(fl) {
         for (let i = 1; i < pts.length; i++)
           ctx.lineTo(px(pts[i][0]), py(pts[i][1]));
         ctx.closePath();
-        ctx.fillStyle = fill;
-        ctx.fill();
         ctx.setLineDash(dash);
         ctx.lineWidth = 1.8;
         ctx.strokeStyle = stroke;
@@ -932,24 +933,10 @@ function drawForceBalance(fl) {
       const x1 = x.getPixelForValue(0);   // log10(Ca/Bo)=0 → Ca/Bo=1
       const y1 = y.getPixelForValue(0);   // log10(1/Bo)=0  → 1/Bo=1
 
-      ctx.save();
-      // Gravity dominated (bottom-left)
-      ctx.fillStyle = 'rgba(167,243,208,0.22)';
-      ctx.fillRect(left, y1, x1-left, bottom-y1);
-      // Viscous dominated (bottom-right)
-      ctx.fillStyle = 'rgba(253,186,116,0.22)';
-      ctx.fillRect(x1, y1, right-x1, bottom-y1);
-      // Capillary dominated (top-left)
-      ctx.fillStyle = 'rgba(196,181,253,0.22)';
-      ctx.fillRect(left, top, x1-left, y1-top);
-      // Mixed viscous + capillary (top-right)
-      ctx.fillStyle = 'rgba(147,197,253,0.20)';
-      ctx.fillRect(x1, top, right-x1, y1-top);
-
-      ctx.setLineDash([5,4]); ctx.lineWidth=1.3; ctx.strokeStyle='rgba(100,116,139,.6)';
-      ctx.beginPath(); ctx.moveTo(left,y1); ctx.lineTo(right,y1); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(x1,top); ctx.lineTo(x1,bottom); ctx.stroke();
-      ctx.restore();
+      // Quadrant fills and the dashed Ca/Bo = 1 and 1/Bo = 1 divider lines were
+      // removed 2026-09-29 — the four corner labels already identify the
+      // regions, and the shading competed with the data points. The quadrant
+      // pixel positions x1/y1 are still used to place those labels.
 
       ctx.save(); ctx.font='10px Segoe UI'; ctx.fillStyle='rgba(71,85,105,.8)';
       ctx.fillText('Gravity',            left+5, bottom-6);
@@ -1055,6 +1042,68 @@ async function loadCCS() {
     $('ccs-note').innerHTML =
       `<span style="color:#b91c1c">Could not load CCS site data (${e.message}).</span>`;
   }
+}
+
+// ── Click-to-set conditions on the phase diagram ─────────────────────────────
+// Clicking a site snaps to its exact reservoir T and P; clicking anywhere in
+// the axes reads the coordinates off. Either way state.T/state.P are updated
+// and schedule() re-runs everything downstream: property cards, Lenormand,
+// force balance, and both "current conditions" markers.
+const APP_T_MIN = 10, APP_T_MAX = 200;    // IFT table lower bound is 10 °C
+const APP_P_MIN = 0.1, APP_P_MAX = 40;    // raised from 20 so deep sites work
+const IFT_P_MAX = 20;                     // IFT table upper bound
+
+function applyConditions(T_C, P_MPa, label) {
+  const T = Math.min(APP_T_MAX, Math.max(APP_T_MIN, T_C));
+  const P = Math.min(APP_P_MAX, Math.max(APP_P_MIN, P_MPa));
+  const clamped = (Math.abs(T - T_C) > 1e-6) || (Math.abs(P - P_MPa) > 1e-6);
+
+  state.T = Math.round(T * 10) / 10;
+  state.P = Math.round(P * 100) / 100;
+  $('T-inp').value = state.T;
+  $('P-inp').value = state.P;
+
+  const bits = [];
+  bits.push(label
+    ? `Set to <strong>${label}</strong>: ${state.T} °C, ${state.P} MPa.`
+    : `Set to <strong>${state.T} °C, ${state.P} MPa</strong>.`);
+  if (clamped) bits.push(`<span style="color:#b45309">Clamped into the
+    calculator's range (${APP_T_MIN}–${APP_T_MAX} °C, ${APP_P_MIN}–${APP_P_MAX} MPa).</span>`);
+  if (state.P > IFT_P_MAX) bits.push(`<span style="color:#b45309">Above
+    ${IFT_P_MAX} MPa the IFT table ends, so IFT is held at its
+    ${IFT_P_MAX} MPa value — Ca and Bo here are indicative, not measured.</span>`);
+  $('ccs-click-note').innerHTML = bits.join(' ');
+
+  schedule();
+}
+
+function attachCCSClick() {
+  const gd = $('ccs-plot');
+  if (gd._ccsClickBound) return;
+  gd._ccsClickBound = true;
+  let handledAt = 0;
+
+  // A click that lands on a trace point (site marker, curve, critical point)
+  gd.on('plotly_click', ev => {
+    const p = ev.points && ev.points[0];
+    if (!p) return;
+    handledAt = Date.now();
+    const isSite = String(p.data.name || '').startsWith('Site');
+    applyConditions(p.x, p.y, isSite ? (p.text || '').trim() : null);
+  });
+
+  // A click on empty space inside the axes: convert pixels to data coords.
+  // plotly_click only fires over traces, so this covers the rest of the plot.
+  gd.addEventListener('click', e => {
+    if (Date.now() - handledAt < 250) return;   // already handled above
+    const fl = gd._fullLayout; if (!fl) return;
+    const bb = gd.getBoundingClientRect();
+    const xa = fl.xaxis, ya = fl.yaxis;
+    const px = e.clientX - bb.left - fl.margin.l;
+    const py = e.clientY - bb.top  - fl.margin.t;
+    if (px < 0 || py < 0 || px > xa._length || py > ya._length) return;
+    applyConditions(xa.p2d(px), ya.p2d(py), null);
+  });
 }
 
 function drawCCS() {
@@ -1173,6 +1222,7 @@ function drawCCS() {
         font: { size: 9.5, color: '#9ca3af' } },
     ],
   }, { responsive: true, displaylogo: false });
+  attachCCSClick();
 
   const nNotSc = nsc.length;
   $('ccs-note').innerHTML = `
