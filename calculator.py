@@ -1,8 +1,11 @@
 """
 Multiphase flow & capillary trapping fluid properties calculator.
 
-Properties at a single (T, P) point for NW/W fluid pairs.
-  - Density, viscosity, compressibility  : CoolProp
+Properties at a single (T, P) point for NW/W fluid pairs, plus property
+surfaces over a (T, P) grid (see surface_grid).
+  - Density, viscosity, speed of sound, isothermal/isentropic
+    compressibility, c_p, c_v, gamma, thermal expansivity, thermal
+    conductivity, Joule-Thomson coefficient, Z   : CoolProp
   - Brine corrections                    : Rowe & Chou (1970); Mao & Duan (2009)
   - CO2 solubility (water + NaCl brine)   : Duan & Sun (2006) Marine Chemistry,
         with fugacity from the Duan, Moller & Weare (1992) BWR EOS
@@ -140,41 +143,137 @@ def _safe(v):
     return float(v) if np.isfinite(v) else None
 
 
-def _nw_props(fluid_id, T_K, P_Pa):
-    """Density, viscosity, compressibility and phase of the NW gas via CoolProp."""
-    cp_name = NW_FLUIDS[fluid_id]["coolprop"]
-    out = {}
+# ── Thermodynamic property block ─────────────────────────────────────────────
+# key -> (display label, unit, use a LOG colour scale on the surface plot)
+# The log flags come from the measured dynamic range over the app's (T,P)
+# window for CO2: kappa_T spans ~2100x and Cp ~50x (both diverge at the
+# critical point), whereas the speed of sound spans only ~3.8x.
+PROP_META = {
+    "density_kg_m3":            ("Density",                    "kg/m³",   False),
+    "viscosity_uPas":           ("Dynamic viscosity",          "µPa·s",   True),
+    "speed_sound_m_s":          ("Speed of sound",             "m/s",     False),
+    "compressibility_1_GPa":    ("Isothermal compressibility",  "GPa⁻¹",  True),
+    "compressibility_s_1_GPa":  ("Isentropic compressibility",  "GPa⁻¹",  True),
+    "cp_J_kgK":                 ("Specific heat c_p",           "J/kg·K", True),
+    "cv_J_kgK":                 ("Specific heat c_v",           "J/kg·K", False),
+    "gamma":                    ("Heat capacity ratio γ",       "—",      True),
+    "expansivity_1_K":          ("Thermal expansivity",         "1/K",    True),
+    "conductivity_W_mK":        ("Thermal conductivity",        "W/m·K",  False),
+    "joule_thomson_K_MPa":      ("Joule–Thomson coefficient",   "K/MPa",  False),
+    "Z":                        ("Compressibility factor Z",    "—",      False),
+}
+
+# Order the property rows appear in the UI cards
+PROP_ORDER = list(PROP_META.keys())
+
+
+def _coolprop_props(cp_name, T_K, P_Pa, state=None):
+    """
+    Every thermodynamic property at (T,P) from ONE AbstractState update.
+
+    Using a single AbstractState keeps all properties on the SAME state point
+    and is far faster than repeated PropsSI calls, which matters for the
+    surface grids (thousands of points).
+
+    Pass `state` to reuse an AbstractState across a grid.
+
+    NOTE: PropsSI("speed_sound", ...) is NOT a valid CoolProp key -- the valid
+    one is "A". That is the same silent-failure trap as "fugacity" described in
+    the module docstring. AbstractState.speed_sound() is unambiguous, so all
+    properties here come from the AbstractState API rather than output strings.
+    """
+    out = {k: None for k in PROP_META}
+    out["phase"] = "Error"
     try:
-        out["density_kg_m3"]          = _safe(CP.PropsSI("D", "T", T_K, "P", P_Pa, cp_name))
-        out["viscosity_uPas"]         = _safe(CP.PropsSI("V", "T", T_K, "P", P_Pa, cp_name) * 1e6)
-        out["compressibility_1_GPa"]  = _safe(CP.PropsSI("isothermal_compressibility",
-                                                          "T", T_K, "P", P_Pa, cp_name) * 1e9)
-        phase_int = int(CP.PropsSI("Phase", "T", T_K, "P", P_Pa, cp_name))
-        out["phase"] = _PHASE.get(phase_int, "Unknown")
-    except Exception as e:
-        out.setdefault("density_kg_m3", None)
-        out.setdefault("viscosity_uPas", None)
-        out.setdefault("compressibility_1_GPa", None)
-        out.setdefault("phase", "Error")
+        AS = state if state is not None else CP.AbstractState("HEOS", cp_name)
+        AS.update(CP.PT_INPUTS, P_Pa, T_K)
+
+        rho = AS.rhomass()
+        cp_ = AS.cpmass()
+        cv_ = AS.cvmass()
+        kT  = AS.isothermal_compressibility()
+        gam = cp_ / cv_ if cv_ else np.nan
+
+        out["density_kg_m3"]           = _safe(rho)
+        out["speed_sound_m_s"]         = _safe(AS.speed_sound())
+        out["compressibility_1_GPa"]   = _safe(kT * 1e9)
+        out["compressibility_s_1_GPa"] = _safe(kT / gam * 1e9)   # κ_s = κ_T/γ
+        out["cp_J_kgK"]                = _safe(cp_)
+        out["cv_J_kgK"]                = _safe(cv_)
+        out["gamma"]                   = _safe(gam)
+        out["expansivity_1_K"]         = _safe(AS.isobaric_expansion_coefficient())
+        out["Z"]                       = _safe(AS.compressibility_factor())
+        out["phase"]                   = _PHASE.get(AS.phase(), "Unknown")
+
+        # Transport properties are unavailable in a few regions for some fluids
+        try:
+            out["viscosity_uPas"]    = _safe(AS.viscosity() * 1e6)
+            out["conductivity_W_mK"] = _safe(AS.conductivity())
+        except Exception:
+            pass
+        try:   # μ_JT = (∂T/∂P)_H, Pa → MPa
+            out["joule_thomson_K_MPa"] = _safe(
+                AS.first_partial_deriv(CP.iT, CP.iP, CP.iHmass) * 1e6)
+        except Exception:
+            pass
+    except Exception:
+        pass
     return out
 
 
-def _w_props(T_K, P_Pa, S_g_L, ki_mol_L=0.0):
-    """Density, viscosity, compressibility of the wetting (brine) phase.
+def _nw_props(fluid_id, T_K, P_Pa):
+    """Full thermodynamic property set for the NW fluid via CoolProp."""
+    return _coolprop_props(NW_FLUIDS[fluid_id]["coolprop"], T_K, P_Pa)
 
-    NaCl: Rowe & Chou (1970) density; Mao & Duan (2009) viscosity.
-    KI  : CRC Handbook density (~128 kg/m3 per mol/L);
-          Jones-Dole viscosity (negative B coefficient -> slight decrease).
+
+# Isothermal compressibility of NaCl brine, relative to pure water:
+#     κ_T(m) / κ_T(water) = exp(-KAPPA_NACL * m),   m in mol/kg
+# Anchored on measured NaCl(aq) at 1.0 mol/kg, 25 °C (c = 1552 m/s,
+# ρ = 1037.5 kg/m³): the identity c² = γ/(ρ·κ_T) gives κ_T = 4.05e-10 Pa⁻¹
+# against 4.52e-10 for pure water, i.e. -10.6% per mol/kg. The exponential
+# form (rather than linear) keeps κ_T positive and reproduces near-saturated
+# brine: at 6 mol/kg it gives c ≈ 1918 m/s, consistent with measurement.
+# Underlying data: Millero et al., PVT properties of concentrated electrolytes
+# (J. Solution Chem.). REPLACES a previous linear coefficient of 2.6e-3 per
+# mol/kg, which was ~43x too weak and made brine essentially as compressible
+# as pure water.
+KAPPA_NACL = 0.112
+
+# Properties that carry NO salt correction and are reported as pure water.
+# Anything listed here must be flagged in the UI.
+_W_PURE_WATER_BASE = ["cp_J_kgK", "cv_J_kgK", "gamma", "expansivity_1_K",
+                      "conductivity_W_mK", "joule_thomson_K_MPa", "Z"]
+
+
+def _w_props(T_K, P_Pa, S_g_L, ki_mol_L=0.0):
+    """Thermodynamic properties of the wetting (brine) phase.
+
+    Salt-corrected:
+      NaCl: Rowe & Chou (1970) density; Mao & Duan (2009) viscosity;
+            isothermal compressibility via KAPPA_NACL above; speed of sound
+            derived from those two by the exact identity c² = γ/(ρ·κ_T).
+      KI  : CRC Handbook density (~128 kg/m3 per mol/L);
+            Jones-Dole viscosity (negative B coefficient -> slight decrease).
+
+    NOT salt-corrected (pure-water values, flagged via "uncorrected_props"):
+      c_p, c_v, γ, expansivity, thermal conductivity, Joule-Thomson, Z for
+      every brine; PLUS compressibility and speed of sound for KI, for which
+      no compressibility coefficient could be sourced. Reporting a pure-water
+      value and saying so is better than a KI sound speed built from corrected
+      density but uncorrected compressibility, which would trend the wrong way.
     """
     T_C = T_K - 273.15
 
-    # Pure water base
-    try:
-        rho_w   = CP.PropsSI("D", "T", T_K, "P", P_Pa, "Water")
-        mu_w    = CP.PropsSI("V", "T", T_K, "P", P_Pa, "Water")
-        kappa_w = CP.PropsSI("isothermal_compressibility", "T", T_K, "P", P_Pa, "Water")
-    except Exception:
-        rho_w, mu_w, kappa_w = np.nan, np.nan, np.nan
+    # Pure water base: full property set, single state point
+    w = _coolprop_props("Water", T_K, P_Pa)
+    rho_w   = w["density_kg_m3"]
+    mu_w    = (w["viscosity_uPas"] / 1e6) if w["viscosity_uPas"] else np.nan
+    kappa_w = (w["compressibility_1_GPa"] / 1e9) if w["compressibility_1_GPa"] else np.nan
+    gamma_w = w["gamma"] if w["gamma"] else np.nan
+    if rho_w is None:
+        rho_w = np.nan
+
+    uncorrected = []
 
     if ki_mol_L > 0:
         # KI density: CRC Handbook data, ~128 kg/m3 per mol/L at 25 C
@@ -185,9 +284,11 @@ def _w_props(T_K, P_Pa, S_g_L, ki_mol_L=0.0):
         ln_mu_r = ki_mol_L * (-0.090 + 1.5e-4 * (T_K - 298.15))
         mu_b = mu_w * np.exp(ln_mu_r) if np.isfinite(mu_w) else np.nan
 
-        kappa_b = kappa_w * (1.0 - 1.5e-3 * ki_mol_L) if np.isfinite(kappa_w) else np.nan
+        # No sourced KI compressibility coefficient -> leave as pure water
+        kappa_b = kappa_w
+        uncorrected = _W_PURE_WATER_BASE + [
+            "compressibility_1_GPa", "compressibility_s_1_GPa", "speed_sound_m_s"]
     else:
-        # NaCl corrections
         m = S_g_L / (Mw_NaCl * 1000)    # mol/kg NaCl
 
         # Density: Rowe & Chou (1970); Batzle & Wang (1992)
@@ -198,14 +299,38 @@ def _w_props(T_K, P_Pa, S_g_L, ki_mol_L=0.0):
         A_mao, B_mao = 1.9741e-2, -4.22e-5
         mu_b = mu_w * np.exp(m * (A_mao + B_mao * T_K)) if np.isfinite(mu_w) else np.nan
 
-        kappa_b = kappa_w * (1.0 - 2.6e-3 * m) if np.isfinite(kappa_w) else np.nan
+        kappa_b = kappa_w * np.exp(-KAPPA_NACL * m) if np.isfinite(kappa_w) else np.nan
+        if m > 0:
+            uncorrected = list(_W_PURE_WATER_BASE)
 
-    return {
-        "density_kg_m3":         _safe(rho_b),
-        "viscosity_uPas":        _safe(mu_b * 1e6),
-        "compressibility_1_GPa": _safe(kappa_b * 1e9),
-        "mu_water_Pas":          mu_w,   # kept for diffusivity calculation below
-    }
+    # Speed of sound from the EXACT identity c² = γ/(ρ·κ_T), so it stays
+    # consistent with the density and compressibility just derived.
+    #
+    # Only do this when κ_T is ITSELF salt-corrected. Mixing a corrected
+    # density with a pure-water κ_T (the KI case) drives c BELOW pure water,
+    # which is the wrong direction -- adding salt raises the sound speed. When
+    # κ_T is uncorrected we therefore report the pure-water c and flag it,
+    # rather than a half-corrected number that trends backwards.
+    if "speed_sound_m_s" in uncorrected:
+        c_b      = w["speed_sound_m_s"]
+        kappa_sb = (kappa_w / gamma_w) if np.isfinite(gamma_w) else np.nan
+    elif np.isfinite(kappa_b) and np.isfinite(rho_b) and np.isfinite(gamma_w) \
+            and rho_b > 0 and kappa_b > 0:
+        c_b      = np.sqrt(gamma_w / (rho_b * kappa_b))
+        kappa_sb = kappa_b / gamma_w
+    else:
+        c_b, kappa_sb = np.nan, np.nan
+
+    out = dict(w)                       # pure-water values for everything else
+    out.pop("phase", None)              # the wetting phase is always liquid here
+    out["density_kg_m3"]           = _safe(rho_b)
+    out["viscosity_uPas"]          = _safe(mu_b * 1e6)
+    out["compressibility_1_GPa"]   = _safe(kappa_b * 1e9)
+    out["compressibility_s_1_GPa"] = _safe(kappa_sb * 1e9)
+    out["speed_sound_m_s"]         = _safe(c_b)
+    out["uncorrected_props"]       = uncorrected
+    out["mu_water_Pas"]            = mu_w   # internal, for diffusivity below
+    return out
 
 
 def _henry_MPa(sol, T_K):
@@ -466,6 +591,312 @@ def compute_flow(Q_ml_hr: float, diam_mm: float, porosity: float,
         "inv_Bo":          _safe(inv_Bo),
         "Ca_Bo_nw":        _safe(Ca_Bo_nw),
         "Ca_Bo_w":         _safe(Ca_Bo_w),
+    }
+
+
+# ── Property surfaces over (T, P) ────────────────────────────────────────────
+
+# Fluids that can be plotted as a surface. These are PURE CoolProp fluids --
+# brine salt corrections are deliberately not applied here, because they touch
+# only 5 of the 12 properties and a mixed surface would be mislabelled.
+SURFACE_FLUIDS = {
+    "CO2":   {"coolprop": "CO2",      "label": "CO₂",         "color": "#e74c3c"},
+    "H2":    {"coolprop": "Hydrogen", "label": "H₂",          "color": "#2980b9"},
+    "N2":    {"coolprop": "Nitrogen", "label": "N₂",          "color": "#27ae60"},
+    "water": {"coolprop": "Water",    "label": "Water (pure)", "color": "#0369a1"},
+}
+
+
+def surface_grid(fluid_key, T_min_C, T_max_C, P_min_MPa, P_max_MPa,
+                 n_T=70, n_P=70):
+    """
+    Thermodynamic properties on a (T, P) grid, for 3-D surface plotting.
+
+    Returns z-matrices indexed [i][j] = property at P[i], T[j], which is the
+    orientation Plotly's surface trace expects for x=T, y=P.
+
+    In P-T space the two-phase region of a pure fluid is a CURVE, not an area,
+    so every grid point off the saturation line is single-phase and CoolProp
+    resolves it. Crossing that line the properties jump discontinuously; the
+    surface shows a genuine cliff there, and the saturation curve is returned
+    separately so it can be drawn.
+    """
+    if fluid_key not in SURFACE_FLUIDS:
+        raise ValueError(f"Unknown surface fluid: {fluid_key}")
+    spec    = SURFACE_FLUIDS[fluid_key]
+    cp_name = spec["coolprop"]
+
+    T_C   = np.linspace(float(T_min_C), float(T_max_C), int(n_T))
+    P_MPa = np.linspace(float(P_min_MPa), float(P_max_MPa), int(n_P))
+    # CoolProp cannot evaluate P = 0
+    P_MPa = np.clip(P_MPa, 1e-3, None)
+
+    keys  = list(PROP_META.keys())
+    props = {k: [[None] * len(T_C) for _ in range(len(P_MPa))] for k in keys}
+
+    AS = CP.AbstractState("HEOS", cp_name)
+    for i, P in enumerate(P_MPa):
+        for j, T in enumerate(T_C):
+            vals = _coolprop_props(cp_name, T + 273.15, P * 1e6, state=AS)
+            for k in keys:
+                props[k][i][j] = vals[k]
+
+    # Critical point
+    try:
+        Tc_C   = CP.PropsSI("Tcrit", cp_name) - 273.15
+        Pc_MPa = CP.PropsSI("Pcrit", cp_name) / 1e6
+    except Exception:
+        Tc_C, Pc_MPa = None, None
+    in_window = (Tc_C is not None
+                 and T_C[0] <= Tc_C <= T_C[-1]
+                 and P_MPa[0] <= Pc_MPa <= P_MPa[-1])
+
+    # Saturation curve, clipped to the window (triple point → critical point)
+    sat_T, sat_P = [], []
+    if Tc_C is not None:
+        try:
+            T_trip_C = CP.PropsSI("Ttriple", cp_name) - 273.15
+            lo = max(T_C[0], T_trip_C)
+            hi = min(T_C[-1], Tc_C)
+            if hi > lo:
+                for Ts in np.linspace(lo, hi, 60):
+                    try:
+                        Ps = CP.PropsSI("P", "T", Ts + 273.15, "Q", 0, cp_name) / 1e6
+                    except Exception:
+                        continue
+                    if P_MPa[0] <= Ps <= P_MPa[-1]:
+                        sat_T.append(float(Ts))
+                        sat_P.append(float(Ps))
+        except Exception:
+            pass
+
+    return {
+        "fluid":  fluid_key,
+        "label":  spec["label"],
+        "color":  spec["color"],
+        "T_C":    [float(v) for v in T_C],
+        "P_MPa":  [float(v) for v in P_MPa],
+        "props":  props,
+        "meta":   {k: {"label": PROP_META[k][0],
+                       "unit":  PROP_META[k][1],
+                       "log":   PROP_META[k][2]} for k in keys},
+        "critical": {
+            "T_C":       _safe(Tc_C) if Tc_C is not None else None,
+            "P_MPa":     _safe(Pc_MPa) if Pc_MPa is not None else None,
+            "in_window": bool(in_window),
+        },
+        "saturation": {"T_C": sat_T, "P_MPa": sat_P},
+    }
+
+
+# ── Field CCS sites on the CO2 phase diagram ─────────────────────────────────
+#
+# IN-SITU conditions at the injection interval (NOT wellhead or injected-stream
+# conditions, which differ -- at Sleipner the injected CO2 arrives ~12 C warmer
+# than the formation). Each entry records where its numbers come from:
+#
+#   provenance "primary"   -> the cited source was read directly and the T and P
+#                             values below are quoted from it
+#   provenance "secondary" -> values reported in the site literature and located
+#                             via that reference, but the source was not read
+#                             directly here; CHECK BEFORE PUBLISHING
+#
+# To add a site, append a dict with the same keys. T_C and P_MPa are both
+# required (a site cannot be placed on the diagram without them).
+CCS_SITES = [
+    {
+        "key": "sleipner", "name": "Sleipner", "country": "Norway",
+        "formation": "Utsira Fm (saline aquifer)",
+        "depth_m": 1012, "T_C": 35.5, "P_MPa": 10.5,
+        "start": 1996, "status": "Operating",
+        "scale": "~1 Mt/yr; >13 Mt by 2011",
+        "reference": "Chadwick & Eiken (2013), ch. 10 in Gluyas & Mathias (eds), "
+                     "Geological Storage of Carbon Dioxide (CO2), Woodhead",
+        "provenance": "primary",
+        "note": "Quoted: initial temperature ~35.5 °C at the 1012 m injection "
+                "depth (~29 °C at reservoir top); hydrostatic pressure 10.5 MPa "
+                "at the injection point.",
+    },
+    {
+        "key": "ketzin", "name": "Ketzin", "country": "Germany",
+        "formation": "Stuttgart Fm (saline aquifer)",
+        "depth_m": 630, "T_C": 33.5, "P_MPa": 6.1,
+        "start": 2008, "status": "Completed 2013",
+        "scale": "67 kt total (pilot)",
+        "reference": "Martens et al. (2012), Environmental Earth Sciences 67, 323–334",
+        "provenance": "secondary",
+        "note": "Initial target-horizon conditions reported as 33.5 °C / 6.1 MPa "
+                "at 630 m. Pressure is BELOW the CO2 critical pressure, so the "
+                "stored CO2 is not supercritical here.",
+    },
+    {
+        "key": "in_salah", "name": "In Salah (Krechba)", "country": "Algeria",
+        "formation": "Carboniferous sandstone",
+        "depth_m": 1880, "T_C": 93.0, "P_MPa": 17.5,
+        "start": 2004, "status": "Injection ceased 2011",
+        "scale": "~3.8 Mt total",
+        "reference": "Iding & Ringrose (2010), Int. J. Greenhouse Gas Control 4, 242–248",
+        "provenance": "secondary",
+        "note": "Storage unit at 1880 m with initial pressure 17.5 MPa and "
+                "temperature 366.15 K (93 °C).",
+    },
+    {
+        "key": "frio", "name": "Frio Brine Pilot", "country": "USA (Texas)",
+        "formation": "Frio Fm (Oligocene fluvial sandstone)",
+        "depth_m": 1650, "T_C": 55.0, "P_MPa": 16.5,
+        "start": 2004, "status": "Completed (pilot)",
+        "scale": "~1.6 kt total",
+        "reference": "Doughty et al. (2008), Energy 33, 1092–1099 "
+                     "(Frio pilot; see also Hovorka et al. 2006, Environmental Geosciences 13)",
+        "provenance": "secondary",
+        "note": "Brine reservoir reported at ~16.5 MPa and ~55 °C at ~1650 m; "
+                "CO2 injected in the supercritical state.",
+    },
+    {
+        "key": "snohvit", "name": "Snøhvit", "country": "Norway",
+        "formation": "Tubåen Fm (fluvial sandstone)",
+        "depth_m": 2600, "T_C": 95.0, "P_MPa": 33.0,
+        "start": 2008, "status": "Tubåen injection ceased 2011",
+        "scale": "~1.1 Mt into Tubåen",
+        "reference": "Hansen et al. (2013), Energy Procedia 37, 3565–3573 (GHGT-11)",
+        "provenance": "primary",
+        "note": "T and P supplied by A. Herring (95 °C, ~330 bar). NOTE the "
+                "Tubåen pressure was NOT steady: reported initial ~290 bar "
+                "rising to ~390 bar, which is why Tubåen injection was stopped "
+                "and moved to the Stø Fm. 330 bar is a mid-injection value, so "
+                "this site is a band in pressure rather than a point.",
+    },
+    {
+        "key": "quest", "name": "Quest", "country": "Canada (Alberta)",
+        "formation": "Basal Cambrian Sands (saline aquifer)",
+        "depth_m": 2000, "T_C": 60.0, "P_MPa": 20.45,
+        "start": 2015, "status": "Operating",
+        "scale": "~1.08 Mt/yr captured",
+        "reference": "Quest Carbon Capture and Storage Project, Volume 1: Project "
+                     "Description (Shell Canada / Government of Alberta), "
+                     "open.alberta.ca",
+        "provenance": "primary",
+        "note": "Initial reservoir T and P read from the project description by "
+                "A. Herring. Depth ~2 km is the commonly quoted BCS figure and is "
+                "approximate; T and P are the sourced values.",
+    },
+    {
+        "key": "ibdp", "name": "Illinois Basin – Decatur (Mt. Simon)", "country": "USA (Illinois)",
+        "formation": "Mt. Simon Sandstone (saline aquifer)",
+        "depth_m": 2140, "T_C": 50.0, "P_MPa": 22.0,
+        "start": 2011, "status": "Injection completed 2014",
+        "scale": "~1 Mt total (IBDP)",
+        "reference": "Illinois Basin – Decatur Project reservoir characterisation "
+                     "literature; see Finley (2014), Greenhouse Gases: Sci. Technol. 4, 571–579",
+        "provenance": "secondary",
+        "note": "APPROXIMATE, assembled from several sources: injection interval "
+                "2129.6–2149.4 m; ~2.2e4 kPa (~22 MPa) at 2147 m; reservoir "
+                "modelled as isothermal at ~49 °C (lab studies at 51 °C). "
+                "Pin the primary reference before publishing.",
+    },
+]
+
+# Sites located but NOT plotted, because a reservoir T or P could not be
+# sourced in this session. Surfaced in the UI so the gap is visible rather
+# than silently missing.
+CCS_SITES_PENDING = [
+    {"name": "Gorgon", "country": "Australia", "have": "Dupuy Fm at ~2300 m; "
+     "formation water up to ~100 °C", "missing": "initial reservoir pressure"},
+    {"name": "Cranfield", "country": "USA (Mississippi)", "have": "lower Tuscaloosa "
+     "Fm at ~3200 m", "missing": "reservoir temperature and pressure"},
+]
+
+
+def co2_phase_diagram(T_min_C=-20.0, T_max_C=140.0,
+                      P_min_MPa=0.5, P_max_MPa=40.0,
+                      iso_densities=(200, 400, 600, 700, 800, 900)):
+    """
+    CO2 phase diagram in (T, P) with field CCS sites placed on it.
+
+    Returns the vapour-pressure (saturation) curve, the critical and triple
+    points, exact iso-density contours, and each site annotated with the CO2
+    density and phase CoolProp gives at its reservoir conditions.
+
+    Iso-density curves are solved EXACTLY rather than contoured from a grid:
+    for each target density, P = PropsSI("P", "T", T, "D", rho). States inside
+    the two-phase dome are rejected by requiring the density to round-trip
+    through a P-T call, which it only does for a genuine single-phase state.
+    """
+    Tc_C   = CP.PropsSI("Tcrit", "CO2") - 273.15
+    Pc_MPa = CP.PropsSI("Pcrit", "CO2") / 1e6
+    Tt_C   = CP.PropsSI("Ttriple", "CO2") - 273.15
+    Pt_MPa = CP.PropsSI("ptriple", "CO2") / 1e6
+
+    # Vapour-pressure curve, triple point -> critical point, clipped to window
+    sat_T, sat_P = [], []
+    lo = max(T_min_C, Tt_C)
+    for Ts in np.linspace(lo, Tc_C, 240):
+        try:
+            Ps = CP.PropsSI("P", "T", Ts + 273.15, "Q", 0, "CO2") / 1e6
+        except Exception:
+            continue
+        if P_min_MPa <= Ps <= P_max_MPa:
+            sat_T.append(float(Ts))
+            sat_P.append(float(Ps))
+
+    # Exact iso-density contours
+    iso = []
+    for rho in iso_densities:
+        cT, cP = [], []
+        for Ts in np.linspace(T_min_C, T_max_C, 200):
+            T_K = Ts + 273.15
+            try:
+                P_Pa = CP.PropsSI("P", "T", T_K, "D", float(rho), "CO2")
+                # Reject two-phase states: density must round-trip via (P,T)
+                rho_back = CP.PropsSI("D", "T", T_K, "P", P_Pa, "CO2")
+                if abs(rho_back - rho) / rho > 1e-3:
+                    continue
+            except Exception:
+                continue
+            P_MPa_ = P_Pa / 1e6
+            if P_min_MPa <= P_MPa_ <= P_max_MPa:
+                cT.append(float(Ts))
+                cP.append(float(P_MPa_))
+        if len(cT) > 1:
+            iso.append({"rho": float(rho), "T_C": cT, "P_MPa": cP})
+
+    # Place the sites and evaluate CO2 there
+    sites = []
+    for s in CCS_SITES:
+        entry = dict(s)
+        props = _coolprop_props("CO2", s["T_C"] + 273.15, s["P_MPa"] * 1e6)
+        entry["co2_density_kg_m3"] = props["density_kg_m3"]
+        entry["co2_phase"]         = props["phase"]
+        entry["above_Tc"] = bool(s["T_C"] >= Tc_C)
+        entry["above_Pc"] = bool(s["P_MPa"] >= Pc_MPa)
+        # "Supercritical" in the storage sense: above BOTH critical values.
+        entry["supercritical"] = bool(entry["above_Tc"] and entry["above_Pc"])
+
+        # Explicit regime label. CoolProp reports T > Tc with P < Pc as
+        # "supercritical gas", which our phase map flattens to "Supercritical
+        # Fluid" -- misleading for a storage site, because the density there is
+        # gas-like. Ketzin is exactly this case, so label it from the critical
+        # comparisons instead.
+        if entry["above_Tc"]:
+            entry["regime"] = ("Supercritical" if entry["above_Pc"]
+                               else "Gas-like (above T_c, below P_c)")
+        else:
+            try:
+                Psat = CP.PropsSI("P", "T", s["T_C"] + 273.15, "Q", 0, "CO2") / 1e6
+                entry["regime"] = "Liquid" if s["P_MPa"] >= Psat else "Vapour"
+            except Exception:
+                entry["regime"] = "—"
+        sites.append(entry)
+
+    return {
+        "T_range": [float(T_min_C), float(T_max_C)],
+        "P_range": [float(P_min_MPa), float(P_max_MPa)],
+        "saturation": {"T_C": sat_T, "P_MPa": sat_P},
+        "critical": {"T_C": float(Tc_C), "P_MPa": float(Pc_MPa)},
+        "triple":   {"T_C": float(Tt_C), "P_MPa": float(Pt_MPa)},
+        "iso_density": iso,
+        "sites": sites,
+        "pending": CCS_SITES_PENDING,
     }
 
 

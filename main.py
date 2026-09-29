@@ -28,6 +28,41 @@ class CalcRequest(BaseModel):
     char_len_um:   float = Field(40.0, ge=0.1, le=10000.0)
     theta_deg:     float = Field(10.0, ge=0.0, lt=90.0)
 
+class SurfaceRequest(BaseModel):
+    fluid:     str   = "CO2"
+    T_min_C:   float = Field(10.0,  ge=-250.0, le=500.0)
+    T_max_C:   float = Field(200.0, ge=-250.0, le=500.0)
+    P_min_MPa: float = Field(0.1,   ge=0.0,    le=100.0)
+    P_max_MPa: float = Field(20.0,  ge=0.0,    le=100.0)
+    n_T:       int   = Field(70, ge=10, le=140)
+    n_P:       int   = Field(70, ge=10, le=140)
+
+
+@app.post("/api/surface")
+def surface(req: SurfaceRequest):
+    if req.fluid not in calculator.SURFACE_FLUIDS:
+        raise HTTPException(400, f"Unknown surface fluid: {req.fluid}")
+    if req.T_max_C <= req.T_min_C:
+        raise HTTPException(400, "T_max_C must be greater than T_min_C")
+    if req.P_max_MPa <= req.P_min_MPa:
+        raise HTTPException(400, "P_max_MPa must be greater than P_min_MPa")
+    return calculator.surface_grid(req.fluid, req.T_min_C, req.T_max_C,
+                                   req.P_min_MPa, req.P_max_MPa,
+                                   req.n_T, req.n_P)
+
+
+@app.get("/api/ccs-sites")
+def ccs_sites():
+    """CO2 phase diagram with field CCS sites placed on it."""
+    return calculator.co2_phase_diagram()
+
+
+@app.get("/api/surface-fluids")
+def surface_fluids():
+    return {k: {"label": v["label"], "color": v["color"]}
+            for k, v in calculator.SURFACE_FLUIDS.items()}
+
+
 @app.get("/api/fluids")
 def list_fluids():
     return {

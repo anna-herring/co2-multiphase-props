@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Multiphase Flow Fluid Properties</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+<!-- 3-D-only Plotly bundle (surface/scatter3d): ~1/3 the size of full plotly.js -->
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-gl3d-dist-min@2.35.2/plotly-gl3d.min.js"></script>
 <style>
   :root {
     --bg: #f0f2f5; --panel: #ffffff; --border: #dde1e7;
@@ -96,6 +98,65 @@
   .btn-group button.nw-n2.active  { background:#27ae60; border-color:#27ae60; }
 
   #salinity-wrap { display:none; margin-top:8px; }
+
+  /* ── Property-surface controls ── */
+  .surf-ctrl {
+    display: flex; flex-wrap: wrap; gap: 10px 26px; align-items: center;
+    padding: 12px 14px 4px;
+  }
+  .surf-group { display: flex; align-items: center; gap: 9px; }
+  .surf-label {
+    font-size: 10.5px; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .surf-fluids button { padding: 5px 11px; font-size: 12px; }
+  .btn-group button.sf-co2.active   { background:#e74c3c; border-color:#e74c3c; }
+  .btn-group button.sf-h2.active    { background:#2980b9; border-color:#2980b9; }
+  .btn-group button.sf-n2.active    { background:#27ae60; border-color:#27ae60; }
+  .btn-group button.sf-water.active { background:#0369a1; border-color:#0369a1; }
+  #surf-prop {
+    padding: 6px 10px; border-radius: 6px; border: 1.5px solid var(--border);
+    background: #fff; color: var(--text); font-size: 12.5px; font-weight: 500;
+    cursor: pointer; min-width: 240px;
+  }
+  #surf-prop:hover { border-color: var(--accent); }
+  .uncorr {
+    color: var(--muted); font-size: 10px; font-weight: 600;
+    vertical-align: super; cursor: help;
+  }
+
+  /* ── Main tabs ── */
+  .tabs {
+    display: flex; gap: 4px; margin-bottom: 14px;
+    border-bottom: 2px solid var(--border);
+  }
+  .tabs button {
+    padding: 9px 20px; border: none; background: none; cursor: pointer;
+    font-size: 13px; font-weight: 600; color: var(--muted);
+    border-bottom: 3px solid transparent; margin-bottom: -2px;
+    transition: color .15s, border-color .15s;
+  }
+  .tabs button:hover { color: var(--accent); }
+  .tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* ── CCS site table ── */
+  .ccs-tbl { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .ccs-tbl th {
+    text-align: left; padding: 6px 8px; border-bottom: 1.5px solid var(--border);
+    font-size: 10px; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted); vertical-align: bottom;
+  }
+  .ccs-tbl td {
+    padding: 7px 8px; border-bottom: 1px solid #f0f2f5; vertical-align: top;
+    line-height: 1.45;
+  }
+  .ccs-tbl tr:last-child td { border-bottom: none; }
+
+  @media (max-width: 700px) {
+    #surface-plot { height: 380px !important; }
+    #surf-prop { min-width: 0; width: 100%; }
+    .surf-group { width: 100%; }
+  }
 
   .phase-badge {
     display: inline-block; padding: 2px 8px; border-radius: 12px;
@@ -311,7 +372,28 @@
 
     <div class="state-bar" id="state-bar"></div>
 
-    <div class="grid-props" id="prop-grid"></div>
+    <div class="tabs" id="main-tabs">
+      <button class="active" data-pane="tables">Tabulated Values</button>
+      <button data-pane="plots">Plots</button>
+    </div>
+
+    <!-- ══ Tab: tabulated values ══════════════════════════════════════════ -->
+    <div class="pane" id="pane-tables">
+
+      <div class="grid-props" id="prop-grid"></div>
+
+      <div class="card" style="margin-top:14px">
+        <div class="card-head" style="background:#0f766e">
+          Field CCS Sites — Reservoir Conditions
+        </div>
+        <div id="ccs-table" style="padding:12px 14px 14px"></div>
+      </div>
+
+      <div class="source-note" id="source-note"></div>
+    </div>
+
+    <!-- ══ Tab: plots ═════════════════════════════════════════════════════ -->
+    <div class="pane" id="pane-plots" style="display:none">
 
     <!-- Charts row -->
     <div class="grid2">
@@ -332,7 +414,37 @@
       </div>
     </div>
 
-    <div class="source-note" id="source-note"></div>
+    <!-- Field CCS sites on the CO2 phase diagram -->
+    <div class="card" style="margin-top:14px">
+      <div class="card-head" style="background:#0f766e">
+        Field CCS Sites on the CO₂ Phase Diagram
+      </div>
+      <div id="ccs-plot" style="width:100%;height:520px"></div>
+      <div id="ccs-note"
+           style="padding:0 14px 14px;font-size:10.5px;color:var(--muted);line-height:1.6"></div>
+    </div>
+
+    <!-- Thermodynamic property surface -->
+    <div class="card" style="margin-top:14px">
+      <div class="card-head" style="background:#7c3aed">
+        Thermodynamic Property Surface
+      </div>
+      <div class="surf-ctrl">
+        <div class="surf-group">
+          <span class="surf-label">Fluid</span>
+          <div class="btn-group surf-fluids" id="surf-fluids"></div>
+        </div>
+        <div class="surf-group">
+          <span class="surf-label">Property</span>
+          <select id="surf-prop"></select>
+        </div>
+      </div>
+      <div id="surface-plot" style="width:100%;height:560px"></div>
+      <div id="surf-note"
+           style="padding:0 14px 12px;font-size:10.5px;color:var(--muted);line-height:1.6"></div>
+    </div>
+
+    </div><!-- /pane-plots -->
   </div>
 </main>
 </div>
@@ -383,6 +495,17 @@ const fmtSci = (v, dec=2) => {
   const e = Math.floor(Math.log10(Math.abs(v)));
   const m = (v / Math.pow(10, e)).toFixed(dec);
   return `${m}×10<sup>${e}</sup>`;
+};
+
+// Canvas can't render HTML, so chart labels need unicode superscripts.
+const SUPS = { '-':'⁻', '0':'⁰','1':'¹','2':'²','3':'³','4':'⁴',
+               '5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹' };
+const fmtSciPlain = (v, dec=2) => {
+  if (v == null || !isFinite(v) || v === 0) return v === 0 ? '0' : '—';
+  const e = Math.floor(Math.log10(Math.abs(v)));
+  const m = (v / Math.pow(10, e)).toFixed(dec);
+  if (e === 0) return m;
+  return `${m}×10${String(e).split('').map(c => SUPS[c] || c).join('')}`;
 };
 
 // ── Input events ──────────────────────────────────────────────────────────────
@@ -497,6 +620,12 @@ function render(d) {
   `;
 
   // ── Property cards ──────────────────────────────────────────────────────────
+  // "pw" marker for a value the backend reports as pure water because no salt
+  // correction could be sourced (see calculator._w_props).
+  const pwFlag = (o, k) => (o.uncorrected_props || []).includes(k)
+    ? ' <span class="uncorr" title="Pure-water value — no salt correction applied">pw</span>'
+    : '';
+
   const nwRows = [
     ['Density',            `${fmt(nw.density_kg_m3,1)} kg/m³`],
     ['Dynamic viscosity',  `${fmt(nw.viscosity_uPas,2)} µPa·s`],
@@ -508,7 +637,8 @@ function render(d) {
   const wRows = [
     ['Density',            `${fmt(w.density_kg_m3,1)} kg/m³`],
     ['Dynamic viscosity',  `${fmt(w.viscosity_uPas,2)} µPa·s`],
-    ['Isotherm. compress.',w.compressibility_1_GPa != null ? `${fmt(w.compressibility_1_GPa,4)} GPa⁻¹` : '—'],
+    ['Isotherm. compress.' + pwFlag(w,'compressibility_1_GPa'),
+      w.compressibility_1_GPa != null ? `${fmt(w.compressibility_1_GPa,4)} GPa⁻¹` : '—'],
     ['Salinity', w.ki_mol_L > 0
       ? `${w.ki_mol_L.toFixed(2)} mol/L KI`
       : w.salinity_g_L > 0
@@ -525,6 +655,29 @@ function render(d) {
     ['Diffusivity in water',  ix.diffusivity_m2_s != null
       ? `${(ix.diffusivity_m2_s*1e9).toFixed(2)}×10⁻⁹ m²/s` : '—'],
   ];
+
+  // Secondary thermodynamic properties, appended to both phase cards.
+  // [key, label, unit, decimal places]
+  const THERMO_ROWS = [
+    ['speed_sound_m_s',         'Speed of sound',                   'm/s',    1],
+    ['compressibility_s_1_GPa', 'Isentropic compress.',             'GPa⁻¹',  4],
+    ['cp_J_kgK',                'Specific heat c<sub>p</sub>',      'J/kg·K', 0],
+    ['cv_J_kgK',                'Specific heat c<sub>v</sub>',      'J/kg·K', 0],
+    ['gamma',                   'γ = c<sub>p</sub>/c<sub>v</sub>',  '',       3],
+    ['expansivity_1_K',         'Thermal expansivity',              'K⁻¹',    5],
+    ['conductivity_W_mK',       'Thermal conductivity',             'W/m·K',  4],
+    ['joule_thomson_K_MPa',     'Joule–Thomson coeff.',             'K/MPa',  3],
+    ['Z',                       'Compressibility factor Z',         '',       4],
+  ];
+
+  function thermoSection(o) {
+    const rows = THERMO_ROWS.map(([k, lab, unit, dp]) => {
+      const v = o[k];
+      const val = v == null ? '—' : `${fmt(v, dp)}${unit ? ' ' + unit : ''}`;
+      return `<tr><td>${lab}${pwFlag(o, k)}</td><td>${val}</td></tr>`;
+    }).join('');
+    return `<tr class="section-head"><td colspan="2">Thermodynamic Properties</td></tr>${rows}`;
+  }
 
   function makeCard(title, color, rows, extraSection) {
     const rowsHtml = rows.map(([k,v]) =>
@@ -561,8 +714,8 @@ function render(d) {
   // Layout: NW + W stacked on left, Interface+Transport on right
   $('prop-grid').innerHTML = `
     <div class="grid-props-left">
-      ${makeCard(`${nw.label} — Nonwetting Phase`, nw.color, nwRows)}
-      ${makeCard(`${w.label} — Wetting Phase`, '#0369a1', wRows)}
+      ${makeCard(`${nw.label} — Nonwetting Phase`, nw.color, nwRows, thermoSection(nw))}
+      ${makeCard(`${w.label} — Wetting Phase`, '#0369a1', wRows, thermoSection(w))}
     </div>
     ${makeCard('Interface &amp; Transport', '#7c3aed', ixRows, flowSection)}
   `;
@@ -570,6 +723,11 @@ function render(d) {
   // ── Charts ──────────────────────────────────────────────────────────────────
   drawLenormand(fl);
   drawForceBalance(fl);
+
+  // Follow the NW fluid; if no reload was triggered, still redraw so the
+  // "current conditions" marker tracks the new T/P.
+  if (!syncSurfaceFluid() && surf.data) drawSurface();
+  if (ccsData) drawCCS();      // move the "your conditions" marker
 
   // ── Source note ─────────────────────────────────────────────────────────────
   $('source-note').innerHTML = `
@@ -617,6 +775,42 @@ const REGIMES = {
 function centroid(pts) {
   return [pts.reduce((s,p)=>s+p[0],0)/pts.length, pts.reduce((s,p)=>s+p[1],0)/pts.length];
 }
+
+// Draws a value label beside every point of any dataset carrying `valueLabel`.
+// Written inline rather than pulling in chartjs-plugin-datalabels: we only need
+// a couple of labels and this avoids another CDN dependency.
+const valueLabelPlugin = {
+  id: 'valueLabels',
+  afterDatasetsDraw(chart) {
+    const ctx = chart.ctx;
+    chart.data.datasets.forEach((ds, i) => {
+      if (!ds.valueLabel) return;
+      const meta = chart.getDatasetMeta(i);
+      if (meta.hidden) return;
+      const lines = String(ds.valueLabel).split('\n');
+      meta.data.forEach(pt => {
+        ctx.save();
+        ctx.font = '600 10.5px "Segoe UI", system-ui, sans-serif';
+        ctx.textBaseline = 'middle';
+        const w = Math.max(...lines.map(l => ctx.measureText(l).width));
+        // Flip to the left of the marker if the label would overrun the axes
+        const toRight = pt.x + 13 + w < chart.chartArea.right;
+        ctx.textAlign = toRight ? 'left' : 'right';
+        const x  = toRight ? pt.x + 12 : pt.x - 12;
+        const y0 = pt.y - (lines.length - 1) * 6.5;
+        lines.forEach((ln, k) => {
+          const y = y0 + k * 13;
+          ctx.lineWidth = 3;                        // halo for legibility over
+          ctx.strokeStyle = 'rgba(255,255,255,.92)'; // the shaded regime boxes
+          ctx.strokeText(ln, x, y);
+          ctx.fillStyle = ds.labelColor || ds.backgroundColor || '#1a1a2e';
+          ctx.fillText(ln, x, y);
+        });
+        ctx.restore();
+      });
+    });
+  }
+};
 
 function drawLenormand(fl) {
   const ctx = $('lenormand-chart').getContext('2d');
@@ -679,6 +873,8 @@ function drawLenormand(fl) {
       label: 'NW injection (drainage)',
       data: [{ x: Math.log10(fl.M_drainage), y: Math.log10(fl.Ca_nw) }],
       backgroundColor: '#dc2626', pointRadius: 8, pointStyle: 'circle',
+      valueLabel: `Ca = ${fmtSciPlain(fl.Ca_nw, 2)}\nM = ${fmtSciPlain(fl.M_drainage, 2)}`,
+      labelColor: '#991b1b',
     });
   }
   if (!datasets.length)
@@ -696,7 +892,7 @@ function drawLenormand(fl) {
 
   lenChart = new Chart(ctx, {
     type: 'scatter',
-    plugins: [regimePlugin],
+    plugins: [regimePlugin, valueLabelPlugin],
     data: { datasets },
     options: {
       animation: false,
@@ -770,6 +966,8 @@ function drawForceBalance(fl) {
       label: 'NW injection',
       data: [{ x: Math.log10(fl.Ca_Bo_nw), y: Math.log10(fl.inv_Bo) }],
       backgroundColor: '#e74c3c', pointRadius: 8, pointStyle: 'circle',
+      valueLabel: `Ca = ${fmtSciPlain(fl.Ca_nw, 2)}\nBo = ${fmtSciPlain(fl.Bo, 2)}`,
+      labelColor: '#991b1b',
     });
   }
   if (fl && fl.Ca_Bo_w && fl.inv_Bo) {
@@ -777,6 +975,8 @@ function drawForceBalance(fl) {
       label: 'W injection',
       data: [{ x: Math.log10(fl.Ca_Bo_w), y: Math.log10(fl.inv_Bo) }],
       backgroundColor: '#2563eb', pointRadius: 8, pointStyle: 'rectRot',
+      valueLabel: `Ca = ${fmtSciPlain(fl.Ca_w, 2)}\nBo = ${fmtSciPlain(fl.Bo, 2)}`,
+      labelColor: '#1e40af',
     });
   }
   if (!datasets.length) {
@@ -785,7 +985,7 @@ function drawForceBalance(fl) {
 
   forceChart = new Chart(ctx, {
     type: 'scatter',
-    plugins: [forcePlugin],
+    plugins: [forcePlugin, valueLabelPlugin],
     data: { datasets },
     options: {
       animation: false,
@@ -808,8 +1008,433 @@ function drawForceBalance(fl) {
   });
 }
 
+// ══ Tabs ═════════════════════════════════════════════════════════════════════
+// Chart.js and Plotly both measure their container at draw time, so anything
+// drawn while its pane is display:none comes out zero-sized. Every switch to
+// the plots pane therefore forces a resize of all four charts.
+let activePane = 'tables';
+
+function showPane(name) {
+  activePane = name;
+  $('pane-tables').style.display = name === 'tables' ? '' : 'none';
+  $('pane-plots').style.display  = name === 'plots'  ? '' : 'none';
+  [...$('main-tabs').children].forEach(b =>
+    b.classList.toggle('active', b.dataset.pane === name));
+  if (name === 'plots') resizePlots();
+}
+
+function resizePlots() {
+  try { lenChart   && lenChart.resize(); }   catch (e) {}
+  try { forceChart && forceChart.resize(); } catch (e) {}
+  if (typeof Plotly !== 'undefined') {
+    ['ccs-plot', 'surface-plot'].forEach(id => {
+      const el = $(id);
+      if (el && el.data) { try { Plotly.Plots.resize(el); } catch (e) {} }
+    });
+  }
+}
+
+$('main-tabs').addEventListener('click', e => {
+  const btn = e.target.closest('[data-pane]');
+  if (btn) showPane(btn.dataset.pane);
+});
+
+// ══ Field CCS sites on the CO2 phase diagram ═════════════════════════════════
+// Static once loaded (the site set does not depend on the sidebar), so this
+// fetches once and then only redraws to move the "current conditions" marker.
+let ccsData = null;
+
+async function loadCCS() {
+  try {
+    const res = await fetch('/api/ccs-sites');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    ccsData = await res.json();
+    drawCCS();
+    buildCCSTable();
+  } catch (e) {
+    $('ccs-note').innerHTML =
+      `<span style="color:#b91c1c">Could not load CCS site data (${e.message}).</span>`;
+  }
+}
+
+function drawCCS() {
+  const d = ccsData; if (!d || typeof Plotly === 'undefined') return;
+  const traces = [];
+
+  // Iso-density contours (exact, solved as P(T, rho) rather than contoured)
+  d.iso_density.forEach((c, i) => {
+    traces.push({
+      type: 'scatter', mode: 'lines', x: c.T_C, y: c.P_MPa,
+      line: { color: '#9ca3af', width: 1, dash: 'dot' },
+      name: `${c.rho} kg/m³`, legendgroup: 'iso',
+      showlegend: false, hoverinfo: 'name',
+    });
+    // Label at the curve midpoint, which keeps labels inside the axes
+    // (labelling the high-pressure end pushes them off the right edge).
+    const k = Math.floor(c.T_C.length / 2);
+    traces.push({
+      type: 'scatter', mode: 'text', x: [c.T_C[k]], y: [c.P_MPa[k]],
+      text: [`${c.rho}`], textposition: 'top center',
+      textfont: { size: 9, color: '#9ca3af' },
+      showlegend: false, hoverinfo: 'skip',
+    });
+  });
+
+  // Vapour-pressure curve and critical point
+  traces.push({
+    type: 'scatter', mode: 'lines',
+    x: d.saturation.T_C, y: d.saturation.P_MPa,
+    line: { color: '#111827', width: 2.5 },
+    name: 'Vapour-pressure curve',
+    hovertemplate: 'Saturation<br>%{x:.1f} °C, %{y:.2f} MPa<extra></extra>',
+  });
+  traces.push({
+    // Marker only — the legend already names it, and an inline label here
+    // collides with Ketzin, which sits just below the critical point.
+    type: 'scatter', mode: 'markers',
+    x: [d.critical.T_C], y: [d.critical.P_MPa],
+    marker: { size: 11, color: '#dc2626', symbol: 'circle',
+              line: { color: '#fff', width: 1.5 } },
+    name: `Critical point (${d.critical.T_C.toFixed(1)} °C, ${d.critical.P_MPa.toFixed(2)} MPa)`,
+    hovertemplate: 'CO₂ critical point<br>%{x:.2f} °C, %{y:.3f} MPa<extra></extra>',
+  });
+
+  // Field sites, split by storage regime
+  const sc  = d.sites.filter(s => s.supercritical);
+  const nsc = d.sites.filter(s => !s.supercritical);
+  const mk = (arr, color, symbol, name) => arr.length && traces.push({
+    type: 'scatter', mode: 'markers+text',
+    x: arr.map(s => s.T_C), y: arr.map(s => s.P_MPa),
+    text: arr.map(s => s.name.replace(/ \(.*\)/, '')),
+    // Above the marker rather than beside it: sites cluster in pressure
+    // (Decatur 22.0 and Quest 20.45 MPa) so side labels collide.
+    textposition: 'top center', textfont: { size: 10, color: '#1a1a2e' },
+    marker: { size: 12, color: color, symbol: symbol,
+              line: { color: '#fff', width: 1.5 } },
+    name: name,
+    customdata: arr.map(s => [s.formation, s.depth_m, s.co2_density_kg_m3,
+                              s.regime, s.country, s.start]),
+    hovertemplate:
+      '<b>%{text}</b> — %{customdata[4]}<br>' +
+      '%{customdata[0]}<br>' +
+      'Depth %{customdata[1]} m · from %{customdata[5]}<br>' +
+      '<b>%{x:.1f} °C, %{y:.1f} MPa</b><br>' +
+      'CO₂ density %{customdata[2]:.0f} kg/m³<br>' +
+      '%{customdata[3]}<extra></extra>',
+  });
+  mk(sc,  '#0f766e', 'circle',  'Site — supercritical CO₂');
+  mk(nsc, '#f59e0b', 'diamond', 'Site — NOT supercritical');
+
+  // Current sidebar conditions, for comparison with the field sites
+  traces.push({
+    type: 'scatter', mode: 'markers',
+    x: [state.T], y: [state.P],
+    marker: { size: 11, color: '#7c3aed', symbol: 'x-thin',
+              line: { color: '#7c3aed', width: 3 } },
+    name: 'Your conditions',
+    hovertemplate: `Sidebar: ${state.T} °C, ${state.P} MPa<extra></extra>`,
+  });
+
+  // The legend wraps to 2-3 rows at card width, so it gets its own reserved
+  // band above the axes rather than floating over the region labels.
+  Plotly.react('ccs-plot', traces, {
+    margin: { l: 58, r: 40, t: 74, b: 46 },
+    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: '#fbfbfd',
+    hovermode: 'closest',
+    legend: { orientation: 'h', x: 0, y: 1.02, yanchor: 'bottom',
+              font: { size: 10.5 } },
+    xaxis: { title: { text: 'Temperature [°C]', font: { size: 11.5 } },
+             range: d.T_range, gridcolor: '#eceef2', zeroline: false,
+             tickfont: { size: 10 } },
+    yaxis: { title: { text: 'Pressure [MPa]', font: { size: 11.5 } },
+             range: d.P_range, gridcolor: '#eceef2', zeroline: false,
+             tickfont: { size: 10 } },
+    shapes: [
+      // Critical isotherm / isobar, to divide the regimes visually
+      { type: 'line', x0: d.critical.T_C, x1: d.critical.T_C,
+        y0: d.critical.P_MPa, y1: d.P_range[1],
+        line: { color: '#dc2626', width: 1, dash: 'dash' } },
+      { type: 'line', x0: d.critical.T_C, x1: d.T_range[1],
+        y0: d.critical.P_MPa, y1: d.critical.P_MPa,
+        line: { color: '#dc2626', width: 1, dash: 'dash' } },
+    ],
+    annotations: [
+      { x: d.critical.T_C + 6, y: d.P_range[1] - 1.5, xanchor: 'left',
+        text: '<b>supercritical</b>', showarrow: false,
+        font: { size: 11, color: '#0f766e' } },
+      { x: d.critical.T_C - 6, y: d.P_range[1] - 1.5, xanchor: 'right',
+        text: '<b>liquid</b>', showarrow: false,
+        font: { size: 11, color: '#1d4ed8' } },
+      { x: d.T_range[1] - 4, y: 1.8, xanchor: 'right',
+        text: '<b>gas</b>', showarrow: false,
+        font: { size: 11, color: '#6b7280' } },
+      { x: d.T_range[0] + 4, y: 1.8, xanchor: 'left',
+        text: 'dotted = CO₂ density [kg/m³]', showarrow: false,
+        font: { size: 9.5, color: '#9ca3af' } },
+    ],
+  }, { responsive: true, displaylogo: false });
+
+  const nNotSc = nsc.length;
+  $('ccs-note').innerHTML = `
+    In-situ reservoir conditions at the injection interval for ${d.sites.length}
+    field CCS sites, on the pure-CO₂ phase diagram (CoolProp, Span &amp; Wagner 1996).
+    Dotted grey lines are exact CO₂ iso-density contours — they show why the same
+    stored mass needs very different pore volume from site to site.
+    ${nNotSc ? `<strong>${nNotSc} site${nNotSc>1?'s are':' is'} not in the supercritical
+    region</strong> (amber diamond): above T<sub>c</sub> but below P<sub>c</sub>, where CO₂ is
+    gas-like and far less dense. ` : ''}
+    The purple × is the condition set in the sidebar.
+    Conditions are reservoir values, not wellhead or injected-stream values, which differ.
+  `;
+}
+
+function buildCCSTable() {
+  const d = ccsData; if (!d) return;
+  const rows = d.sites.map(s => `
+    <tr>
+      <td style="font-weight:600">${s.name}</td>
+      <td>${s.country}</td>
+      <td>${s.formation}</td>
+      <td style="text-align:right">${s.depth_m}</td>
+      <td style="text-align:right">${s.T_C.toFixed(1)}</td>
+      <td style="text-align:right">${s.P_MPa.toFixed(2)}</td>
+      <td style="text-align:right">${s.co2_density_kg_m3 != null ? s.co2_density_kg_m3.toFixed(0) : '—'}</td>
+      <td>${s.regime}</td>
+      <td style="font-size:10px">${s.reference}
+        ${s.provenance === 'secondary'
+          ? '<span class="uncorr" title="Reference identified from the literature but not read directly in this session — verify before publishing">check</span>'
+          : ''}
+        <div style="color:var(--muted);margin-top:2px">${s.note}</div></td>
+    </tr>`).join('');
+
+  const pending = d.pending.map(p =>
+    `<li><strong>${p.name}</strong> (${p.country}) — have: ${p.have}; <em>missing: ${p.missing}</em></li>`
+  ).join('');
+
+  $('ccs-table').innerHTML = `
+    <div style="overflow-x:auto">
+    <table class="ccs-tbl">
+      <thead><tr>
+        <th>Site</th><th>Country</th><th>Formation</th>
+        <th style="text-align:right">Depth<br>[m]</th>
+        <th style="text-align:right">T<br>[°C]</th>
+        <th style="text-align:right">P<br>[MPa]</th>
+        <th style="text-align:right">ρ<sub>CO₂</sub><br>[kg/m³]</th>
+        <th>Regime</th><th>Source</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    ${pending ? `<div style="margin-top:10px;font-size:10.5px;color:var(--muted);line-height:1.6">
+      <strong style="color:var(--text)">Located but not plotted</strong> — a reservoir
+      temperature or pressure could not be sourced, and neither is estimated here:
+      <ul style="margin:4px 0 0 18px;padding:0">${pending}</ul></div>` : ''}
+  `;
+}
+
+// ══ Thermodynamic property surface ═══════════════════════════════════════════
+// Grid spans the app's own operating window, so the surface always covers the
+// conditions the calculator above is reporting. CO2 is the only fluid whose
+// critical point falls inside that window (31 °C, 7.38 MPa); water's is at
+// 374 °C / 22.06 MPa and H2/N2 are cryogenic, so those surfaces are smooth.
+const SURF_T_MIN = 10,  SURF_T_MAX = 200;    // °C   — matches T_C bounds
+const SURF_P_MIN = 0.1, SURF_P_MAX = 20;     // MPa  — matches P_MPa bounds
+
+const surf = {
+  fluid: 'CO2',
+  prop:  'speed_sound_m_s',
+  data:  null,
+  userPickedFluid: false,   // once true, stop following the NW selector
+  inflight: null,
+};
+
+function surfFluidCls(k) { return 'sf-' + k.toLowerCase(); }
+
+async function initSurfaceFluids() {
+  let fluids;
+  try {
+    fluids = await (await fetch('/api/surface-fluids')).json();
+  } catch (e) { return; }
+  $('surf-fluids').innerHTML = Object.entries(fluids).map(([k, v]) =>
+    `<button class="${surfFluidCls(k)}${k === surf.fluid ? ' active' : ''}" data-sf="${k}">${v.label}</button>`
+  ).join('');
+  $('surf-fluids').addEventListener('click', e => {
+    const btn = e.target.closest('[data-sf]'); if (!btn) return;
+    surf.userPickedFluid = true;
+    surf.fluid = btn.dataset.sf;
+    [...$('surf-fluids').children].forEach(b => b.classList.toggle('active', b === btn));
+    loadSurface();
+  });
+}
+
+// Keep the surface on the NW fluid the user is studying, until they choose
+// a surface fluid explicitly (e.g. water), after which it stays put.
+// Returns true if it kicked off a reload (which redraws on its own).
+function syncSurfaceFluid() {
+  if (surf.userPickedFluid || surf.fluid === state.nw) return false;
+  surf.fluid = state.nw;
+  [...($('surf-fluids').children || [])].forEach(b =>
+    b.classList.toggle('active', b.dataset.sf === surf.fluid));
+  loadSurface();
+  return true;
+}
+
+async function loadSurface() {
+  const body = {
+    fluid: surf.fluid,
+    T_min_C: SURF_T_MIN, T_max_C: SURF_T_MAX,
+    P_min_MPa: SURF_P_MIN, P_max_MPa: SURF_P_MAX,
+    n_T: 70, n_P: 70,
+  };
+  const tag = JSON.stringify(body);
+  surf.inflight = tag;
+  try {
+    const res = await fetch('/api/surface', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const d = await res.json();
+    if (surf.inflight !== tag) return;          // a newer request superseded us
+    surf.data = d;
+    populatePropSelect(d);
+    drawSurface();
+  } catch (e) {
+    $('surf-note').innerHTML =
+      `<span style="color:#b91c1c">Could not load the property surface (${e.message}).</span>`;
+  }
+}
+
+function populatePropSelect(d) {
+  const sel = $('surf-prop');
+  if (sel.dataset.filled === '1') return;       // property list is fluid-independent
+  sel.innerHTML = Object.entries(d.meta).map(([k, m]) =>
+    `<option value="${k}"${k === surf.prop ? ' selected' : ''}>${m.label}${m.unit !== '—' ? ` [${m.unit}]` : ''}</option>`
+  ).join('');
+  sel.dataset.filled = '1';
+  sel.addEventListener('change', () => { surf.prop = sel.value; drawSurface(); });
+}
+
+function drawSurface() {
+  const d = surf.data; if (!d || typeof Plotly === 'undefined') return;
+  const meta = d.meta[surf.prop];
+  const zRaw = d.props[surf.prop];
+
+  // Properties that diverge at the critical point span 2-3 orders of
+  // magnitude; plotting log10 keeps the rest of the surface readable instead
+  // of flattening it under one spike. Guard against non-positive values
+  // (the Joule-Thomson coefficient changes sign, expansivity can too).
+  const finite = zRaw.flat().filter(v => v != null && isFinite(v));
+  const useLog = meta.log && finite.length > 0 && Math.min(...finite) > 0;
+  const z = useLog ? zRaw.map(r => r.map(v => (v == null || v <= 0) ? null : Math.log10(v)))
+                   : zRaw;
+
+  const zAxisTitle = useLog ? `log₁₀ ${meta.label}` + (meta.unit !== '—' ? ` [${meta.unit}]` : '')
+                            : meta.label + (meta.unit !== '—' ? ` [${meta.unit}]` : '');
+
+  const zAll = z.flat().filter(v => v != null && isFinite(v));
+  const zMin = zAll.length ? Math.min(...zAll) : 0;
+  const zMax = zAll.length ? Math.max(...zAll) : 1;
+
+  const traces = [{
+    type: 'surface', x: d.T_C, y: d.P_MPa, z: z,
+    colorscale: 'Viridis', showscale: true,
+    colorbar: { title: { text: useLog ? 'log₁₀' : (meta.unit === '—' ? '' : meta.unit),
+                         side: 'right', font: { size: 11 } },
+                thickness: 14, len: 0.7, tickfont: { size: 10 } },
+    contours: { z: { show: true, usecolormap: true, project: { z: true },
+                     highlightcolor: '#ffffff', width: 1 } },
+    hovertemplate: 'T = %{x:.1f} °C<br>P = %{y:.2f} MPa<br>' +
+                   (useLog ? 'log₁₀ value' : 'value') + ' = %{z:.4g}<extra></extra>',
+  }];
+
+  // Saturation (vapour-pressure) curve, drawn on the floor of the box
+  const sat = d.saturation;
+  if (sat && sat.T_C.length) {
+    traces.push({
+      type: 'scatter3d', mode: 'lines',
+      x: sat.T_C, y: sat.P_MPa, z: sat.T_C.map(() => zMin),
+      line: { color: '#111827', width: 5 },
+      name: 'Saturation curve', hoverinfo: 'name',
+    });
+  }
+
+  // Critical point: a vertical stem from the floor to the surface
+  const crit = d.critical;
+  if (crit && crit.in_window) {
+    const jT = nearestIdx(d.T_C, crit.T_C);
+    const iP = nearestIdx(d.P_MPa, crit.P_MPa);
+    const zc = (z[iP] && z[iP][jT] != null) ? z[iP][jT] : zMax;
+    traces.push({
+      type: 'scatter3d', mode: 'lines+markers',
+      x: [crit.T_C, crit.T_C], y: [crit.P_MPa, crit.P_MPa], z: [zMin, zc],
+      line: { color: '#dc2626', width: 6 },
+      marker: { size: [3, 7], color: '#dc2626', symbol: 'circle' },
+      name: `Critical point (${crit.T_C.toFixed(1)} °C, ${crit.P_MPa.toFixed(2)} MPa)`,
+      hovertemplate: 'Critical point<br>%{x:.2f} °C, %{y:.2f} MPa<extra></extra>',
+    });
+  }
+
+  // Where the calculator above is currently evaluated
+  if (state.P >= SURF_P_MIN && state.P <= SURF_P_MAX) {
+    const jT = nearestIdx(d.T_C, state.T);
+    const iP = nearestIdx(d.P_MPa, state.P);
+    const zs = (z[iP] && z[iP][jT] != null) ? z[iP][jT] : null;
+    if (zs != null) traces.push({
+      type: 'scatter3d', mode: 'markers',
+      x: [state.T], y: [state.P], z: [zs],
+      marker: { size: 7, color: '#f59e0b', symbol: 'diamond',
+                line: { color: '#78350f', width: 1 } },
+      name: 'Current conditions',
+      hovertemplate: `Current: ${state.T} °C, ${state.P} MPa<br>%{z:.4g}<extra></extra>`,
+    });
+  }
+
+  // Axis titles are deliberately short ("T", "P"): Plotly draws 3-D axis
+  // titles at the projected corners of the cube, so longer text clips at the
+  // card width. Units are in the titles, the hover box and the caption.
+  Plotly.react('surface-plot', traces, {
+    margin: { l: 0, r: 0, t: 8, b: 24 },
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    showlegend: true,
+    legend: { orientation: 'h', x: 0, y: 1.06, font: { size: 11 } },
+    scene: {
+      domain: { x: [0.02, 0.92] },          // leave room for the colorbar
+      xaxis: { title: { text: 'T [°C]',  font: { size: 11 } }, tickfont: { size: 10 } },
+      yaxis: { title: { text: 'P [MPa]', font: { size: 11 } }, tickfont: { size: 10 } },
+      zaxis: { title: { text: zAxisTitle, font: { size: 10 } }, tickfont: { size: 10 } },
+      camera: { eye: { x: 1.62, y: -1.46, z: 0.86 } },
+      aspectratio: { x: 1, y: 0.95, z: 0.78 },
+    },
+  }, { responsive: true, displaylogo: false });
+
+  // Caption
+  const critTxt = crit && crit.T_C != null
+    ? (crit.in_window
+        ? `Critical point <strong>${crit.T_C.toFixed(1)} °C, ${crit.P_MPa.toFixed(2)} MPa</strong> (red stem) lies inside this window.`
+        : `Critical point (${crit.T_C.toFixed(1)} °C, ${crit.P_MPa.toFixed(2)} MPa) lies <em>outside</em> this window, so no critical anomaly appears.`)
+    : '';
+  $('surf-note').innerHTML = `
+    ${meta.label} for ${d.label} over the calculator's operating window
+    (${SURF_T_MIN}–${SURF_T_MAX} °C, ${SURF_P_MIN}–${SURF_P_MAX} MPa), from CoolProp.
+    ${useLog ? 'Plotted as log₁₀ because this property spans several orders of magnitude near the critical point. ' : ''}
+    ${critTxt}
+    ${sat && sat.T_C.length ? 'Black curve on the floor is the vapour-pressure (saturation) line; the surface steps across it because the fluid changes phase. ' : ''}
+    Amber diamond marks the conditions set in the sidebar. Drag to rotate.
+    Surfaces are for the <em>pure</em> fluid — brine salt corrections are not applied here.
+  `;
+}
+
+function nearestIdx(arr, v) {
+  let best = 0, bd = Infinity;
+  for (let i = 0; i < arr.length; i++) {
+    const d2 = Math.abs(arr[i] - v);
+    if (d2 < bd) { bd = d2; best = i; }
+  }
+  return best;
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 fetchData();
+initSurfaceFluids().then(loadSurface);
+loadCCS();
 </script>
 </body>
 </html>
