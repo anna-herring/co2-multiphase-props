@@ -688,10 +688,15 @@ function render(d) {
   ];
 
   function thermoSection(o) {
+    // Sound speed is salt-corrected, but built with pure-water γ. That biases
+    // it LOW by ~0.5% per mol/kg, one-directionally — marked rather than hidden.
+    const gammaFlag = k => (k === 'speed_sound_m_s' && o.gamma_is_pure_water)
+      ? ' <span class="uncorr" title="Derived from c = √(γ/ρκ_T) using the salt-corrected density and compressibility but the PURE-WATER heat capacity ratio γ. True brine γ is higher by ~1% per mol/kg, so this reads low by roughly 0.5% per mol/kg (≈0.6% at 1 mol/kg, ≈1.8% at 3 mol/kg).">γ</span>'
+      : '';
     const rows = THERMO_ROWS.map(([k, lab, unit, dp]) => {
       const v = o[k];
       const val = v == null ? '—' : `${fmt(v, dp)}${unit ? ' ' + unit : ''}`;
-      return `<tr><td>${lab}${pwFlag(o, k)}</td><td>${val}</td></tr>`;
+      return `<tr><td>${lab}${pwFlag(o, k)}${gammaFlag(k)}</td><td>${val}</td></tr>`;
     }).join('');
     return `<tr class="section-head"><td colspan="2">Thermodynamic Properties</td></tr>${rows}`;
   }
@@ -755,6 +760,12 @@ function render(d) {
     <strong>Methods &amp; sources:</strong>
     <strong>NW/W properties:</strong> CoolProp (Bell et al. 2014).
     Brine density: Rowe &amp; Chou (1970). Brine viscosity: Mao &amp; Duan (2009).
+    <strong>Brine compressibility:</strong> κ<sub>T</sub>(m) = κ<sub>T,water</sub>·exp(−a·m),
+    a = 0.106 (NaCl) and 0.122 (KI) fitted to measured κ<sub>T</sub> of Apelblat (2017),
+    <em>J. Mol. Liq.</em> <strong>Brine speed of sound:</strong> from the exact identity
+    c = √(γ/ρκ<sub>T</sub>) with the salt-corrected density and compressibility —
+    but the <em>pure-water</em> γ, which biases c low by roughly 0.5% per mol/kg
+    (≈0.6% at 1 mol/kg, ≈1.8% at 3 mol/kg).
     <strong>Solubility:</strong> Henry's law (NIST/Sander 2015) + Krichevsky–Kasarnovsky pressure correction + Sechenov salting-out (Schumpe 1993).
     <strong>Diffusivity:</strong> Stokes–Einstein scaling from D(25 °C) reference values.
     <strong>IFT:</strong> ${ix.ift_source}. Salinity: +0.04 mN/m per g/L NaCl (Hebach et al. 2002).

@@ -354,6 +354,20 @@ def _w_props(T_K, P_Pa, S_g_L, ki_mol_L=0.0):
     # Speed of sound from the EXACT identity c² = γ/(ρ·κ_T), so it stays
     # consistent with the density and compressibility just derived. Both salts
     # now have a measured κ_T, so both take this path.
+    #
+    # LIMITATION — γ is taken as PURE WATER's. Inverting the identity on
+    # Apelblat's measured ρ, c and κ_T recovers the true brine γ, and it is
+    # systematically HIGHER than water's by roughly 1% per mol/kg
+    # (NaCl ≈ 1 + 0.008·m, KI ≈ 1 + 0.012·m). Because c ∝ √γ, holding γ at the
+    # pure-water value biases the sound speed LOW by about half that:
+    #
+    #     1 mol/kg -> c low by ~0.6%      3 mol/kg -> ~1.8%
+    #     6 mol/kg -> c low by ~3.4%
+    #
+    # The bias is one-directional, so it never averages out. It is left in
+    # deliberately: correcting it needs a third salt-specific coefficient and
+    # only improves the mean error in c from ~0.3% to ~0.1%. Flagged to the UI
+    # via "gamma_is_pure_water" so the approximation is visible, not hidden.
     if np.isfinite(kappa_b) and np.isfinite(rho_b) and np.isfinite(gamma_w) \
             and rho_b > 0 and kappa_b > 0:
         c_b      = np.sqrt(gamma_w / (rho_b * kappa_b))
@@ -370,6 +384,8 @@ def _w_props(T_K, P_Pa, S_g_L, ki_mol_L=0.0):
     out["speed_sound_m_s"]         = _safe(c_b)
     out["uncorrected_props"]       = uncorrected
     out["water_not_liquid"]        = False
+    # True whenever salt is present: c was built with pure-water γ (see above)
+    out["gamma_is_pure_water"]     = bool(m > 0)
     out["mu_water_Pas"]            = mu_w   # internal, for diffusivity below
     return out
 
