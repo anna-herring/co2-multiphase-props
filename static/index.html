@@ -440,6 +440,16 @@
           <span class="surf-label">Property</span>
           <select id="surf-prop"></select>
         </div>
+        <div class="surf-group">
+          <span class="surf-label">Colour</span>
+          <select id="surf-cmap">
+            <option value="brand" selected>Tool palette</option>
+            <option value="twilight">Twilight (cyclic)</option>
+            <option value="twilight_shifted">Twilight shifted (cyclic)</option>
+            <option value="Viridis">Viridis</option>
+            <option value="Cividis">Cividis</option>
+          </select>
+        </div>
       </div>
       <div id="surface-plot" style="width:100%;height:560px"></div>
       <div id="surf-note"
@@ -1418,6 +1428,42 @@ function buildCCSTable() {
   `;
 }
 
+// ══ Surface colourmaps ═══════════════════════════════════════════════════════
+// "brand" is built from the tool's own palette — the wetting-phase blue
+// (#0369a1), the accent blue (#2563eb), the interface purple (#7c3aed), the
+// CO2 red (#dc2626), the sensitivity brown (#b45309) and the amber marker
+// (#f59e0b). Those hues were NOT used raw: saturated blue, purple and red all
+// sit near L* 45, so chaining them gives a flat middle that reads as one level.
+// Each anchor keeps its hue but its lightness is forced onto a linear ramp,
+// giving L* 16 -> 86 monotonically. It also stays monotonic in greyscale, so
+// it survives printing in black and white.
+//
+// twilight is matplotlib's, sampled directly. It is CYCLIC — its two ends are
+// the same colour, rgb(226,217,226) — so on a non-cyclic property surface the
+// minimum and maximum render identically. Offered because it was asked for,
+// but the colourbar is ambiguous by construction.
+const CMAPS = {
+  brand: [[0.0000,"rgb(26,40,62)"],  [0.0833,"rgb(12,55,88)"],  [0.1667,"rgb(0,70,116)"],
+          [0.2500,"rgb(0,78,165)"],  [0.3333,"rgb(0,85,217)"],  [0.4167,"rgb(96,85,240)"],
+          [0.5000,"rgb(150,81,255)"],[0.5833,"rgb(231,82,170)"],[0.6667,"rgb(255,92,76)"],
+          [0.7500,"rgb(255,132,91)"],[0.8333,"rgb(255,165,107)"],[0.9167,"rgb(255,187,119)"],
+          [1.0000,"rgb(255,208,131)"]],
+  twilight: [[0.0000,"rgb(226,217,226)"],[0.0625,"rgb(196,206,212)"],[0.1250,"rgb(149,181,199)"],
+          [0.1875,"rgb(114,151,193)"],[0.2500,"rgb(98,118,186)"], [0.3125,"rgb(94,81,173)"],
+          [0.3750,"rgb(89,42,143)"],  [0.4375,"rgb(69,19,92)"],   [0.5000,"rgb(47,20,54)"],
+          [0.5625,"rgb(74,19,66)"],   [0.6250,"rgb(116,30,79)"],  [0.6875,"rgb(152,53,80)"],
+          [0.7500,"rgb(178,86,82)"],  [0.8125,"rgb(194,124,99)"], [0.8750,"rgb(204,163,137)"],
+          [0.9375,"rgb(216,199,190)"],[1.0000,"rgb(226,217,226)"]],
+  twilight_shifted: [[0.0000,"rgb(48,20,55)"], [0.0625,"rgb(69,19,92)"],  [0.1250,"rgb(89,42,143)"],
+          [0.1875,"rgb(94,81,173)"], [0.2500,"rgb(98,118,186)"],[0.3125,"rgb(114,151,193)"],
+          [0.3750,"rgb(149,181,199)"],[0.4375,"rgb(196,206,212)"],[0.5000,"rgb(226,217,226)"],
+          [0.5625,"rgb(216,199,190)"],[0.6250,"rgb(204,163,137)"],[0.6875,"rgb(194,124,99)"],
+          [0.7500,"rgb(178,86,82)"], [0.8125,"rgb(152,53,80)"], [0.8750,"rgb(116,30,79)"],
+          [0.9375,"rgb(74,19,66)"],  [1.0000,"rgb(47,20,54)"]],
+};
+const CYCLIC_CMAPS = ['twilight', 'twilight_shifted'];
+const cmapOf = name => CMAPS[name] || name;   // built-in Plotly names pass through
+
 // ══ Thermodynamic property surface ═══════════════════════════════════════════
 // Grid spans the app's own operating window, so the surface always covers the
 // conditions the calculator above is reporting. CO2 is the only fluid whose
@@ -1428,6 +1474,7 @@ const SURF_P_MIN = 0.1, SURF_P_MAX = 20;     // MPa  — matches P_MPa bounds
 
 const surf = {
   fluid: 'CO2',
+  cmap:  'brand',
   prop:  'speed_sound_m_s',
   data:  null,
   userPickedFluid: false,   // once true, stop following the NW selector
@@ -1497,6 +1544,12 @@ function populatePropSelect(d) {
   ).join('');
   sel.dataset.filled = '1';
   sel.addEventListener('change', () => { surf.prop = sel.value; drawSurface(); });
+
+  const cs = $('surf-cmap');
+  if (cs && cs.dataset.bound !== '1') {
+    cs.dataset.bound = '1';
+    cs.addEventListener('change', () => { surf.cmap = cs.value; drawSurface(); });
+  }
 }
 
 function drawSurface() {
@@ -1522,7 +1575,7 @@ function drawSurface() {
 
   const traces = [{
     type: 'surface', x: d.T_C, y: d.P_MPa, z: z,
-    colorscale: 'Viridis', showscale: true,
+    colorscale: cmapOf(surf.cmap), showscale: true,
     colorbar: { title: { text: useLog ? 'log₁₀' : (meta.unit === '—' ? '' : meta.unit),
                          side: 'right', font: { size: 11 } },
                 thickness: 14, len: 0.7, tickfont: { size: 10 } },
@@ -1606,6 +1659,10 @@ function drawSurface() {
     ${sat && sat.T_C.length ? 'Black curve on the floor is the vapour-pressure (saturation) line; the surface steps across it because the fluid changes phase. ' : ''}
     Amber diamond marks the conditions set in the sidebar. Drag to rotate.
     Surfaces are for the <em>pure</em> fluid — brine salt corrections are not applied here.
+    ${CYCLIC_CMAPS.includes(surf.cmap) ? `<br><span style="color:#b45309">
+      <strong>${surf.cmap.replace('_',' ')} is a cyclic colourmap</strong> — its two ends are the
+      same colour, so the lowest and highest values render identically and the colourbar is
+      ambiguous. Fine for seeing structure, not for reading magnitude off the colour.</span>` : ''}
   `;
 }
 
