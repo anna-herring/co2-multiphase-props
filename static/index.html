@@ -825,7 +825,10 @@ const valueLabelPlugin = {
         const toRight = pt.x + 13 + w < chart.chartArea.right;
         ctx.textAlign = toRight ? 'left' : 'right';
         const x  = toRight ? pt.x + 12 : pt.x - 12;
-        const y0 = pt.y - (lines.length - 1) * 6.5;
+        // labelDY pushes the whole block clear of the marker row. The two
+        // force-balance points share a y (Bo does not depend on which phase is
+        // injected), so without this their labels sit on the same line.
+        const y0 = pt.y + (ds.labelDY || 0) - (lines.length - 1) * 6.5;
         lines.forEach((ln, k) => {
           const y = y0 + k * 13;
           ctx.lineWidth = 3;                        // halo for legibility over
@@ -983,8 +986,12 @@ function drawForceBalance(fl) {
       label: 'NW injection',
       data: [{ x: Math.log10(fl.Ca_Bo_nw), y: Math.log10(fl.inv_Bo) }],
       backgroundColor: '#e74c3c', pointRadius: 8, pointStyle: 'circle',
-      valueLabel: `Ca = ${fmtSciPlain(fl.Ca_nw, 2)}\nBo = ${fmtSciPlain(fl.Bo, 2)}`,
-      labelColor: '#991b1b',
+      // Bo is shown once only: it is identical for both injection directions
+      // (it has no viscosity in it) and is already encoded in the shared y
+      // position, so repeating it on both labels was duplication as well as
+      // clutter. NW label goes above the marker row, W below.
+      valueLabel: `Ca = ${fmtSciPlain(fl.Ca_nw)}\nBo = ${fmtSciPlain(fl.Bo)}`,
+      labelColor: '#991b1b', labelDY: -20,
     });
   }
   if (fl && fl.Ca_Bo_w && fl.inv_Bo) {
@@ -992,8 +999,8 @@ function drawForceBalance(fl) {
       label: 'W injection',
       data: [{ x: Math.log10(fl.Ca_Bo_w), y: Math.log10(fl.inv_Bo) }],
       backgroundColor: '#2563eb', pointRadius: 8, pointStyle: 'rectRot',
-      valueLabel: `Ca = ${fmtSciPlain(fl.Ca_w, 2)}\nBo = ${fmtSciPlain(fl.Bo, 2)}`,
-      labelColor: '#1e40af',
+      valueLabel: `Ca = ${fmtSciPlain(fl.Ca_w)}`,
+      labelColor: '#1e40af', labelDY: +18,
     });
   }
   if (!datasets.length) {
