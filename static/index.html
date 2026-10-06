@@ -629,7 +629,18 @@ function render(d) {
     ['Phase state',        nw.phase ? `<span class="phase-badge ${phaseCls(nw.phase)}">${nw.phase}</span>` : '—'],
   ];
 
-  const wRows = [
+  // Below water's saturation pressure the wetting phase is steam, and the
+  // brine correlations do not apply — the backend blanks them and sets this.
+  const wNotLiquid = !!w.water_not_liquid;
+
+  const wRows = wNotLiquid ? [
+    ['Phase state', '<span class="phase-badge phase-gas">Not liquid</span>'],
+    ['Status', '<span style="color:#b45309">Below the saturation pressure of '
+      + 'water at this temperature, so the wetting phase is vapour. The brine '
+      + 'correlations (density, viscosity, compressibility) are liquid-only '
+      + 'and are not reported here. Raise the pressure above P<sub>sat</sub> '
+      + 'to get wetting-phase properties, Ca and Bo.</span>'],
+  ] : [
     ['Density',            `${fmt(w.density_kg_m3,1)} kg/m³`],
     ['Dynamic viscosity',  `${fmt(w.viscosity_uPas,2)} µPa·s`],
     ['Isotherm. compress.' + pwFlag(w,'compressibility_1_GPa'),
@@ -713,7 +724,8 @@ function render(d) {
   $('prop-grid').innerHTML = `
     <div class="grid-props-left">
       ${makeCard(`${nw.label} — Nonwetting Phase`, nw.color, nwRows, thermoSection(nw))}
-      ${makeCard(`${w.label} — Wetting Phase`, '#0369a1', wRows, thermoSection(w))}
+      ${makeCard(`${w.label} — Wetting Phase`, '#0369a1', wRows,
+                 wNotLiquid ? '' : thermoSection(w))}
     </div>
     ${makeCard('Interface &amp; Transport', '#7c3aed', ixRows, flowSection)}
   `;

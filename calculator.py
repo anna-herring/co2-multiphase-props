@@ -231,6 +231,23 @@ _W_PURE_WATER_BASE = ["cp_J_kgK", "cv_J_kgK", "gamma", "expansivity_1_K",
                       "conductivity_W_mK", "joule_thomson_K_MPa", "Z"]
 
 
+def _water_is_liquid(T_K, P_Pa):
+    """
+    True when water at (T,P) is LIQUID -- the only state in which the brine
+    correlations below are defined.
+
+    Compares against the saturation pressure rather than reading CoolProp's
+    phase label, because above P_c (22.06 MPa) CoolProp reports compressed
+    liquid as "supercritical_liquid", which a label test would wrongly reject.
+    """
+    try:
+        if T_K >= CP.PropsSI("Tcrit", "Water"):
+            return False                      # beyond water's critical point
+        return P_Pa >= CP.PropsSI("P", "T", T_K, "Q", 0, "Water")
+    except Exception:
+        return True    # fail open: an EOS hiccup shouldn't blank a valid state
+
+
 def _w_props(T_K, P_Pa, S_g_L, ki_mol_L=0.0):
     """Thermodynamic properties of the wetting (brine) phase.
 
@@ -249,6 +266,21 @@ def _w_props(T_K, P_Pa, S_g_L, ki_mol_L=0.0):
       density but uncorrected compressibility, which would trend the wrong way.
     """
     T_C = T_K - 273.15
+
+    # GUARD: every correlation below (Rowe & Chou density, Mao & Duan
+    # viscosity, KAPPA_NACL compressibility, Jones-Dole) is a LIQUID
+    # correlation. Below the saturation pressure CoolProp hands back steam and
+    # these would be applied to it regardless -- at 200 C / 0.1 MPa that turned
+    # 0.46 kg/m3 of vapour into a "brine" at 45.1 kg/m3 with a 57 m/s sound
+    # speed. Report nothing and say why, rather than a plausible-looking wrong
+    # number. This also makes `flow` None downstream, so no Ca or Bo is
+    # produced from a non-liquid wetting phase.
+    if not _water_is_liquid(T_K, P_Pa):
+        out = {k: None for k in PROP_META}
+        out["water_not_liquid"]  = True
+        out["uncorrected_props"] = []
+        out["mu_water_Pas"]      = np.nan
+        return out
 
     # Pure water base: full property set, single state point
     w = _coolprop_props("Water", T_K, P_Pa)
@@ -315,6 +347,7 @@ def _w_props(T_K, P_Pa, S_g_L, ki_mol_L=0.0):
     out["compressibility_s_1_GPa"] = _safe(kappa_sb * 1e9)
     out["speed_sound_m_s"]         = _safe(c_b)
     out["uncorrected_props"]       = uncorrected
+    out["water_not_liquid"]        = False
     out["mu_water_Pas"]            = mu_w   # internal, for diffusivity below
     return out
 
