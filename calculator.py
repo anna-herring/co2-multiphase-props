@@ -213,18 +213,33 @@ def _nw_props(fluid_id, T_K, P_Pa):
     return _coolprop_props(NW_FLUIDS[fluid_id]["coolprop"], T_K, P_Pa)
 
 
-# Isothermal compressibility of NaCl brine, relative to pure water:
-#     κ_T(m) / κ_T(water) = exp(-KAPPA_NACL * m),   m in mol/kg
-# Anchored on measured NaCl(aq) at 1.0 mol/kg, 25 °C (c = 1552 m/s,
-# ρ = 1037.5 kg/m³): the identity c² = γ/(ρ·κ_T) gives κ_T = 4.05e-10 Pa⁻¹
-# against 4.52e-10 for pure water, i.e. -10.6% per mol/kg. The exponential
-# form (rather than linear) keeps κ_T positive and reproduces near-saturated
-# brine: at 6 mol/kg it gives c ≈ 1918 m/s, consistent with measurement.
-# Underlying data: Millero et al., PVT properties of concentrated electrolytes
-# (J. Solution Chem.). REPLACES a previous linear coefficient of 2.6e-3 per
-# mol/kg, which was ~43x too weak and made brine essentially as compressible
-# as pure water.
-KAPPA_NACL = 0.112
+# Isothermal compressibility of brine, relative to pure water:
+#     κ_T(m) / κ_T(water) = exp(-KAPPA_SALT * m),   m in mol/kg WATER
+#
+# Both coefficients are fitted to MEASURED κ_T, tabulated directly in
+#   Apelblat, A. (2017), "Effect of temperature on compressibility properties
+#   of 0.1, 0.5 and 1.0 molal solutions of alkali metal halides. Part 1 ...",
+#   Journal of Molecular Liquids — supplementary Table S1 (NaCl) and
+#   Table 11 (KI; captioned "TABLE 11", the S is missing in the supplement).
+# Measured at 0.1, 0.5 and 1.0 mol/kg over 278–353 K; κ_T there is in
+# 1e-10 Pa⁻¹. Each coefficient is the least-squares fit of ln(κ_T/κ_water)
+# against m, averaged over temperature.
+#
+# NOTE KI suppresses compressibility slightly MORE than NaCl per mol/kg
+# (0.122 vs 0.106) — the opposite of what was assumed when KI was previously
+# left uncorrected.
+#
+# The coefficient is genuinely temperature dependent (NaCl 0.136 at 5 °C
+# falling to 0.091 at 80 °C), but holding it constant costs at most ~3% in
+# κ_T at 1 mol/kg across that range, against a correction of ~11%. A constant
+# is therefore used; if that 3% ever matters, the per-temperature values are
+# in the paper's tables.
+#
+# Supersedes an anchor-on-one-point estimate of 0.112 for NaCl, which this
+# measured data confirms to 2% (0.110 at 25 °C), and a previous coefficient of
+# 2.6e-3 that was ~43x too weak.
+KAPPA_NACL = 0.106
+KAPPA_KI   = 0.122
 
 # Properties that carry NO salt correction and are reported as pure water.
 # Anything listed here must be flagged in the UI.
@@ -254,19 +269,17 @@ def _water_is_liquid(T_K, P_Pa):
 def _w_props(T_K, P_Pa, S_g_L, ki_mol_L=0.0):
     """Thermodynamic properties of the wetting (brine) phase.
 
-    Salt-corrected:
-      NaCl: Rowe & Chou (1970) density; Mao & Duan (2009) viscosity;
-            isothermal compressibility via KAPPA_NACL above; speed of sound
-            derived from those two by the exact identity c² = γ/(ρ·κ_T).
+    Salt-corrected, BOTH salts on the same footing:
+      NaCl: Rowe & Chou (1970) density; Mao & Duan (2009) viscosity.
       KI  : CRC Handbook density (~128 kg/m3 per mol/L);
             Jones-Dole viscosity (negative B coefficient -> slight decrease).
+      both: isothermal compressibility from measured κ_T, Apelblat (2017)
+            (KAPPA_NACL / KAPPA_KI above); speed of sound then follows from
+            density and κ_T by the exact identity c² = γ/(ρ·κ_T).
 
     NOT salt-corrected (pure-water values, flagged via "uncorrected_props"):
-      c_p, c_v, γ, expansivity, thermal conductivity, Joule-Thomson, Z for
-      every brine; PLUS compressibility and speed of sound for KI, for which
-      no compressibility coefficient could be sourced. Reporting a pure-water
-      value and saying so is better than a KI sound speed built from corrected
-      density but uncorrected compressibility, which would trend the wrong way.
+      expansivity, thermal conductivity, Joule-Thomson and Z -- plus c_p, c_v
+      and γ, which are computed but no longer displayed.
     """
     T_C = T_K - 273.15
 
@@ -296,6 +309,17 @@ def _w_props(T_K, P_Pa, S_g_L, ki_mol_L=0.0):
 
     uncorrected = []
 
+    def _molality(c_mol_L, Mw_kg_mol, rho_kg_m3):
+        """
+        mol/L of solution -> mol/kg of WATER, which is what the compressibility
+        coefficients are fitted against. Ignoring this treats 1 mol/L KI as
+        1 mol/kg when it is really 1.05, a 5% error in the exponent.
+        """
+        if not np.isfinite(rho_kg_m3):
+            return c_mol_L
+        kg_water_per_L = rho_kg_m3 / 1000.0 - c_mol_L * Mw_kg_mol
+        return c_mol_L / kg_water_per_L if kg_water_per_L > 0 else c_mol_L
+
     if ki_mol_L > 0:
         # KI density: CRC Handbook data, ~128 kg/m3 per mol/L at 25 C
         d_rho = ki_mol_L * (128.0 - 0.04 * T_C)
@@ -305,37 +329,32 @@ def _w_props(T_K, P_Pa, S_g_L, ki_mol_L=0.0):
         ln_mu_r = ki_mol_L * (-0.090 + 1.5e-4 * (T_K - 298.15))
         mu_b = mu_w * np.exp(ln_mu_r) if np.isfinite(mu_w) else np.nan
 
-        # No sourced KI compressibility coefficient -> leave as pure water
-        kappa_b = kappa_w
-        uncorrected = _W_PURE_WATER_BASE + [
-            "compressibility_1_GPa", "compressibility_s_1_GPa", "speed_sound_m_s"]
+        # Compressibility: Apelblat (2017) Table 11 (see KAPPA_KI above)
+        m = _molality(ki_mol_L, Mw_KI, rho_b)
+        kappa_b = kappa_w * np.exp(-KAPPA_KI * m) if np.isfinite(kappa_w) else np.nan
+        if m > 0:
+            uncorrected = list(_W_PURE_WATER_BASE)
     else:
-        m = S_g_L / (Mw_NaCl * 1000)    # mol/kg NaCl
-
         # Density: Rowe & Chou (1970); Batzle & Wang (1992)
         d_rho = S_g_L * (0.824 - 4.66e-4 * T_C + 8.4e-7 * T_C ** 2)
         rho_b = rho_w + d_rho if np.isfinite(rho_w) else np.nan
+
+        c_mol_L = S_g_L / (Mw_NaCl * 1000)          # g/L -> mol/L
+        m = _molality(c_mol_L, Mw_NaCl, rho_b)      # -> mol/kg water
 
         # Viscosity: Mao & Duan (2009)
         A_mao, B_mao = 1.9741e-2, -4.22e-5
         mu_b = mu_w * np.exp(m * (A_mao + B_mao * T_K)) if np.isfinite(mu_w) else np.nan
 
+        # Compressibility: Apelblat (2017) Table S1 (see KAPPA_NACL above)
         kappa_b = kappa_w * np.exp(-KAPPA_NACL * m) if np.isfinite(kappa_w) else np.nan
         if m > 0:
             uncorrected = list(_W_PURE_WATER_BASE)
 
     # Speed of sound from the EXACT identity c² = γ/(ρ·κ_T), so it stays
-    # consistent with the density and compressibility just derived.
-    #
-    # Only do this when κ_T is ITSELF salt-corrected. Mixing a corrected
-    # density with a pure-water κ_T (the KI case) drives c BELOW pure water,
-    # which is the wrong direction -- adding salt raises the sound speed. When
-    # κ_T is uncorrected we therefore report the pure-water c and flag it,
-    # rather than a half-corrected number that trends backwards.
-    if "speed_sound_m_s" in uncorrected:
-        c_b      = w["speed_sound_m_s"]
-        kappa_sb = (kappa_w / gamma_w) if np.isfinite(gamma_w) else np.nan
-    elif np.isfinite(kappa_b) and np.isfinite(rho_b) and np.isfinite(gamma_w) \
+    # consistent with the density and compressibility just derived. Both salts
+    # now have a measured κ_T, so both take this path.
+    if np.isfinite(kappa_b) and np.isfinite(rho_b) and np.isfinite(gamma_w) \
             and rho_b > 0 and kappa_b > 0:
         c_b      = np.sqrt(gamma_w / (rho_b * kappa_b))
         kappa_sb = kappa_b / gamma_w
