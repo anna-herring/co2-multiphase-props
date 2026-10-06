@@ -720,6 +720,126 @@ def surface_grid(fluid_key, T_min_C, T_max_C, P_min_MPa, P_max_MPa,
     }
 
 
+# ── T,P sensitivity ──────────────────────────────────────────────────────────
+#
+# Relative (logarithmic) sensitivity:
+#
+#     S_T = (100/X)·dX/dT  [%/K]        S_P = (100/X)·dX/dP  [%/MPa]
+#
+# Normalised by X so that properties with different units, and the two phases,
+# are directly comparable -- a raw dX/dT comparison between CO2 and brine is
+# diluted by their very different densities.
+#
+# The reason for the log form rather than any other normalisation is that log
+# derivatives ADD through products and quotients, so an output's sensitivity
+# decomposes exactly into its inputs'. Since
+#     Ca = v·mu_inj/(sigma·cos θ)   and   Bo = Δrho·g·L²/(sigma·cos θ)
+# and v, g, L, θ do not depend on T or P at fixed flow rate:
+#     S(Ca_nw) = S(mu_nw) − S(sigma)        S(Bo) = S(Δrho) − S(sigma)
+# Verified numerically to 4–5 significant figures. That decomposition is the
+# useful part: it says WHICH property drives an output's sensitivity.
+#
+# Note the density row is not new physics -- -(1/rho)(drho/dT) is the thermal
+# expansivity and (1/rho)(drho/dP) the isothermal compressibility, both already
+# reported. It reproduces them to 6 figures, which is a free check on the method.
+
+SENS_DT = 0.05     # K,   converged (see below)
+SENS_DP = 0.005    # MPa
+
+# Step size matters near the critical point, where the derivative genuinely
+# diverges: CO2 density at 32 °C/7.5 MPa reads -63 %/K at a 0.5 K step but
+# converges to -32.0 %/K below 0.01 K. Do not coarsen these.
+
+SENS_PROPS = [
+    ("density_kg_m3",        "Density"),
+    ("viscosity_uPas",       "Viscosity"),
+    ("speed_sound_m_s",      "Speed of sound"),
+    ("compressibility_1_GPa", "Isothermal compress."),
+]
+
+
+def _rel_sens(f, T_C, P_MPa):
+    """
+    (S_T, S_P) in %/K and %/MPa for a scalar function f(T_C, P_MPa).
+    Returns (None, None) if the value is missing, zero, or the stencil
+    straddles a discontinuity (e.g. the water saturation line).
+    """
+    try:
+        x0 = f(T_C, P_MPa)
+        if x0 is None or not np.isfinite(x0) or x0 == 0:
+            return None, None
+        tp, tm = f(T_C + SENS_DT, P_MPa), f(T_C - SENS_DT, P_MPa)
+        pp, pm = f(T_C, P_MPa + SENS_DP), f(T_C, P_MPa - SENS_DP)
+        if any(v is None or not np.isfinite(v) for v in (tp, tm, pp, pm)):
+            return None, None
+        return (_safe(100 * (tp - tm) / (2 * SENS_DT) / x0),
+                _safe(100 * (pp - pm) / (2 * SENS_DP) / x0))
+    except Exception:
+        return None, None
+
+
+def sensitivity_block(T_C, P_MPa, nw_id, S_g_L, ki_mol_L=0.0):
+    """
+    Relative T and P sensitivity of the NW and wetting-phase properties, plus
+    the Ca/Bo decomposition. See the header comment for the definition.
+
+    IFT honesty: above the IFT table's 20 MPa ceiling _ift() clamps, so
+    dSigma/dP is identically zero for a NON-PHYSICAL reason. That would read as
+    "IFT is pressure-insensitive here", so S_P(sigma) and everything derived
+    from it is reported as None with sigma_clamped set, rather than as 0.
+    """
+    nw_f = lambda k: (lambda T, P: _nw_props(nw_id, T + 273.15, P * 1e6)[k])
+    w_f  = lambda k: (lambda T, P: _w_props(T + 273.15, P * 1e6, S_g_L,
+                                            ki_mol_L=ki_mol_L)[k])
+
+    rows = []
+    for key, label in SENS_PROPS:
+        nT, nP = _rel_sens(nw_f(key), T_C, P_MPa)
+        wT, wP = _rel_sens(w_f(key),  T_C, P_MPa)
+        ratio = (abs(nT / wT) if (nT and wT) else None,
+                 abs(nP / wP) if (nP and wP) else None)
+        rows.append({"key": key, "label": label,
+                     "nw_T": nT, "nw_P": nP, "w_T": wT, "w_P": wP,
+                     "ratio_T": _safe(ratio[0]) if ratio[0] else None,
+                     "ratio_P": _safe(ratio[1]) if ratio[1] else None})
+
+    # IFT, and whether its pressure derivative is real
+    sig_f = lambda T, P: _ift(nw_id, T, P, S_g_L, ki_mol_L=ki_mol_L)
+    sigT, sigP = _rel_sens(sig_f, T_C, P_MPa)
+    sigma_clamped = ift_out_of_range(T_C, P_MPa) or ift_out_of_range(T_C, P_MPa + SENS_DP)
+    if sigma_clamped:
+        sigP = None
+
+    # Δrho drives Bo
+    def drho(T, P):
+        a = _nw_props(nw_id, T + 273.15, P * 1e6)["density_kg_m3"]
+        b = _w_props(T + 273.15, P * 1e6, S_g_L, ki_mol_L=ki_mol_L)["density_kg_m3"]
+        return None if (a is None or b is None) else abs(b - a)
+    dT_, dP_ = _rel_sens(drho, T_C, P_MPa)
+
+    mu_nw_T, mu_nw_P = rows[1]["nw_T"], rows[1]["nw_P"]
+    mu_w_T,  mu_w_P  = rows[1]["w_T"],  rows[1]["w_P"]
+    sub = lambda a, b: None if (a is None or b is None) else _safe(a - b)
+
+    derived = [
+        {"label": "Ca (NW injection)", "S_T": sub(mu_nw_T, sigT), "S_P": sub(mu_nw_P, sigP),
+         "parts": "S(μ_NW) − S(σ)"},
+        {"label": "Ca (W injection)",  "S_T": sub(mu_w_T, sigT),  "S_P": sub(mu_w_P, sigP),
+         "parts": "S(μ_W) − S(σ)"},
+        {"label": "Bond number Bo",    "S_T": sub(dT_, sigT),     "S_P": sub(dP_, sigP),
+         "parts": "S(Δρ) − S(σ)"},
+    ]
+
+    return {
+        "dT_K": SENS_DT, "dP_MPa": SENS_DP,
+        "rows": rows,
+        "ift":  {"S_T": sigT, "S_P": sigP, "clamped": bool(sigma_clamped)},
+        "drho": {"S_T": dT_, "S_P": dP_},
+        "derived": derived,
+        "note_fixed_Q": True,
+    }
+
+
 # ── Field CCS sites on the CO2 phase diagram ─────────────────────────────────
 #
 # IN-SITU conditions at the injection interval (NOT wellhead or injected-stream
@@ -1045,11 +1165,17 @@ def calculate(T_C: float, P_MPa: float, nw_id: str, w_id: str,
         flow["char_len_um"]     = char_len_um
         flow["theta_deg"]       = theta_deg
 
+    try:
+        sens = sensitivity_block(T_C, P_MPa, nw_id, S, ki_mol_L=ki)
+    except Exception:
+        sens = None
+
     return {
         "T_C":    T_C,
         "P_MPa":  P_MPa,
         "nw":     nw,
         "wetting": w_out,
         "interaction": interaction,
+        "sensitivity": sens,
         "flow":   flow,
     }

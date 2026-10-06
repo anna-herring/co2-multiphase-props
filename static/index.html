@@ -380,6 +380,13 @@
 
       <div class="grid-props" id="prop-grid"></div>
 
+      <div class="card" style="margin-top:14px">
+        <div class="card-head" style="background:#b45309">
+          Sensitivity to Temperature &amp; Pressure
+        </div>
+        <div id="sens-block" style="padding:12px 14px 14px"></div>
+      </div>
+
       <div class="source-note" id="source-note"></div>
     </div>
 
@@ -730,6 +737,9 @@ function render(d) {
     ${makeCard('Interface &amp; Transport', '#7c3aed', ixRows, flowSection)}
   `;
 
+  // ── Sensitivity ─────────────────────────────────────────────────────────────
+  renderSensitivity(d.sensitivity, nw.label, w.label);
+
   // ── Charts ──────────────────────────────────────────────────────────────────
   drawLenormand(fl);
   drawForceBalance(fl);
@@ -1005,6 +1015,103 @@ function drawForceBalance(fl) {
       },
     },
   });
+}
+
+// ══ Sensitivity block ════════════════════════════════════════════════════════
+// Relative (logarithmic) sensitivity, S = (100/X)·dX/dT in %/K and %/MPa.
+// Normalised by X so different units and the two phases are comparable, and
+// because log derivatives ADD through products — which is what lets Ca and Bo
+// decompose into the properties driving them.
+function renderSensitivity(s, nwLabel, wLabel) {
+  const el = $('sens-block');
+  if (!s) { el.innerHTML = '<span style="color:var(--muted)">Not available.</span>'; return; }
+
+  const num = (v, dp = 2) => v == null
+    ? '<span style="color:var(--muted)">—</span>'
+    : `${v > 0 ? '+' : ''}${v.toFixed(dp)}`;
+  const mult = v => v == null
+    ? '<span style="color:var(--muted)">—</span>'
+    : (v >= 10 ? `${Math.round(v)}×` : `${v.toFixed(1)}×`);
+
+  const propRows = s.rows.map(r => `
+    <tr>
+      <td>${r.label}</td>
+      <td style="text-align:right">${num(r.nw_T, 3)}</td>
+      <td style="text-align:right">${num(r.w_T, 3)}</td>
+      <td style="text-align:right;color:var(--muted)">${mult(r.ratio_T)}</td>
+      <td style="text-align:right;border-left:1px solid var(--border)">${num(r.nw_P, 3)}</td>
+      <td style="text-align:right">${num(r.w_P, 3)}</td>
+      <td style="text-align:right;color:var(--muted)">${mult(r.ratio_P)}</td>
+    </tr>`).join('');
+
+  const clampNote = s.ift.clamped
+    ? ' <span class="uncorr" title="Above 20 MPa the measured IFT table ends and the value is clamped, so its pressure derivative would be exactly zero for a non-physical reason. Reported as unavailable rather than 0.">clamped</span>'
+    : '';
+  const iftRow = `
+    <tr>
+      <td>Interfacial tension${clampNote}</td>
+      <td style="text-align:right" colspan="2">${num(s.ift.S_T, 3)}</td>
+      <td></td>
+      <td style="text-align:right;border-left:1px solid var(--border)" colspan="2">${num(s.ift.S_P, 3)}</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>Δρ (ρ<sub>W</sub> − ρ<sub>NW</sub>)</td>
+      <td style="text-align:right" colspan="2">${num(s.drho.S_T, 3)}</td>
+      <td></td>
+      <td style="text-align:right;border-left:1px solid var(--border)" colspan="2">${num(s.drho.S_P, 3)}</td>
+      <td></td>
+    </tr>`;
+
+  const derivedRows = s.derived.map(g => `
+    <tr>
+      <td>${g.label}<div style="color:var(--muted);font-size:10px">${g.parts}</div></td>
+      <td style="text-align:right;font-weight:600" colspan="2">${num(g.S_T, 3)}</td>
+      <td></td>
+      <td style="text-align:right;font-weight:600;border-left:1px solid var(--border)" colspan="2">${num(g.S_P, 3)}</td>
+      <td></td>
+    </tr>`).join('');
+
+  el.innerHTML = `
+    <div style="overflow-x:auto">
+    <table class="ccs-tbl">
+      <thead>
+        <tr>
+          <th rowspan="2" style="vertical-align:bottom">Property</th>
+          <th colspan="3" style="text-align:center">per °C &nbsp;[%/K]</th>
+          <th colspan="3" style="text-align:center;border-left:1px solid var(--border)">per MPa &nbsp;[%/MPa]</th>
+        </tr>
+        <tr>
+          <th style="text-align:right">${nwLabel}</th>
+          <th style="text-align:right">${wLabel}</th>
+          <th style="text-align:right">ratio</th>
+          <th style="text-align:right;border-left:1px solid var(--border)">${nwLabel}</th>
+          <th style="text-align:right">${wLabel}</th>
+          <th style="text-align:right">ratio</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${propRows}
+        <tr class="section-head"><td colspan="7">Interface</td></tr>
+        ${iftRow}
+        <tr class="section-head"><td colspan="7">Derived — at fixed flow rate</td></tr>
+        ${derivedRows}
+      </tbody>
+    </table></div>
+    <div style="margin-top:10px;font-size:10.5px;color:var(--muted);line-height:1.6">
+      <strong style="color:var(--text)">S = (100/X)·dX/dT</strong>, the fractional change per °C
+      and per MPa. Normalised by X so properties with different units — and the two phases —
+      compare directly; a raw dX/dT comparison is skewed by the phases simply having
+      different magnitudes. Because log derivatives add through products, the derived rows
+      are exact decompositions, not separate estimates: they say <em>which</em> property
+      drives each output. Central differences, ±${s.dT_K} °C and ±${s.dP_MPa} MPa.
+      Density's two entries are the thermal expansivity and isothermal compressibility
+      reported above, so they double as a check on the method.
+      Derived rows hold flow rate fixed. Near the critical point the derivative genuinely
+      diverges, so values there are large and step-dependent — read them as magnitude,
+      not as a precise figure.
+      ${s.ift.clamped ? '<br><span style="color:#b45309"><strong>IFT is clamped at this pressure</strong> (above the 20 MPa table limit), so its pressure derivative and everything built on it are unavailable rather than zero.</span>' : ''}
+    </div>`;
 }
 
 // ══ Tabs ═════════════════════════════════════════════════════════════════════
