@@ -94,8 +94,6 @@
   .btn-group button:hover { border-color: var(--accent); color: var(--accent); }
   .btn-group button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
   .btn-group button.nw-co2.active { background:#e74c3c; border-color:#e74c3c; }
-  .btn-group button.nw-h2.active  { background:#2980b9; border-color:#2980b9; }
-  .btn-group button.nw-n2.active  { background:#27ae60; border-color:#27ae60; }
 
   #salinity-wrap { display:none; margin-top:8px; }
 
@@ -111,8 +109,6 @@
   }
   .surf-fluids button { padding: 5px 11px; font-size: 12px; }
   .btn-group button.sf-co2.active   { background:#e74c3c; border-color:#e74c3c; }
-  .btn-group button.sf-h2.active    { background:#2980b9; border-color:#2980b9; }
-  .btn-group button.sf-n2.active    { background:#27ae60; border-color:#27ae60; }
   .btn-group button.sf-water.active { background:#0369a1; border-color:#0369a1; }
   #surf-prop {
     padding: 6px 10px; border-radius: 6px; border: 1.5px solid var(--border);
@@ -244,7 +240,7 @@
 <header>
   <button id="sidebar-toggle" title="Hide controls"></button>
   <h1>Multiphase Flow Fluid Properties</h1>
-  <p>Thermodynamic, transport &amp; flow properties for CO₂/H₂/N₂ – water/brine systems</p>
+  <p>Thermodynamic, transport &amp; flow properties for CO₂ – water/brine systems</p>
 </header>
 
 <div class="app">
@@ -351,8 +347,6 @@
   <div style="font-size:11px;color:var(--muted);line-height:1.7">
     <strong style="color:var(--text)">EoS validity (CoolProp):</strong><br>
     CO₂: Span &amp; Wagner (1996) — 216–1100 K, 0–800 MPa ✓<br>
-    H₂: Leachman et al. (2009) — 14–1000 K, 0–2000 MPa ✓<br>
-    N₂: Span et al. (2000) — 63–2000 K, 0–2200 MPa ✓<br>
     Note: CO₂ below T<sub>c</sub>=31.1 °C may be liquid/two-phase<br>
     IFT tables: 10–200 °C (10–20 °C extrapolated)<br>
     Brine: Rowe &amp; Chou (1970); Mao &amp; Duan (2009)<br>
@@ -415,7 +409,7 @@
 
     <!-- Field CCS sites on the CO2 phase diagram -->
     <div class="card" style="margin-top:14px">
-      <div class="card-head" style="background:#0f766e">
+      <div class="card-head" style="background:#c2410c">
         Field CCS Sites on the CO₂ Phase Diagram
       </div>
       <div id="ccs-plot" style="width:100%;height:520px"></div>
@@ -439,16 +433,6 @@
         <div class="surf-group">
           <span class="surf-label">Property</span>
           <select id="surf-prop"></select>
-        </div>
-        <div class="surf-group">
-          <span class="surf-label">Colour</span>
-          <select id="surf-cmap">
-            <option value="brand" selected>Tool palette</option>
-            <option value="twilight">Twilight (cyclic)</option>
-            <option value="twilight_shifted">Twilight shifted (cyclic)</option>
-            <option value="Viridis">Viridis</option>
-            <option value="Cividis">Cividis</option>
-          </select>
         </div>
       </div>
       <div id="surface-plot" style="width:100%;height:560px"></div>
@@ -688,7 +672,7 @@ function render(d) {
     ['Solubility (mol frac)', sol.mol_frac != null ? fmtSci(sol.mol_frac,3) : '—'],
     ['Solubility (mg/L)',     `${fmt(sol.mg_L,1)} mg/L`],
     ['Solubility (mmol/L)',   `${fmt(sol.mmol_L,2)} mmol/L`],
-    ['Diffusivity in water',  ix.diffusivity_m2_s != null
+    ['CO₂ diffusivity in water',  ix.diffusivity_m2_s != null
       ? `${(ix.diffusivity_m2_s*1e9).toFixed(2)}×10⁻⁹ m²/s` : '—'],
   ];
 
@@ -800,12 +784,12 @@ const REGIMES = {
   lenormand: {
     CF: { pts:[[-4,-10],[0,-6],[4,-6],[4,-10]],         fill:'rgba(96,165,250,0.28)',  stroke:'rgba(29,78,216,0.80)',  dash:[] },
     VF: { pts:[[-6,-8],[-3,-5],[-3,0],[-6,0]],          fill:'rgba(251,191,36,0.28)',  stroke:'rgba(146,64,14,0.80)',  dash:[] },
-    SD: { pts:[[1,0],[1,-1.25],[4,-1.25],[4,0]],        fill:'rgba(52,211,153,0.28)',  stroke:'rgba(4,120,87,0.80)',   dash:[] },
+    SD: { pts:[[1,0],[1,-1.25],[4,-1.25],[4,0]],        fill:'rgba(194,65,12,0.00)',  stroke:'rgba(194,65,12,0.80)',   dash:[] },
   },
   zhang: {
     CF: { pts:[[4,-4.1],[0.25,-4.1],[-5.5,-10],[4,-10]],   fill:'rgba(96,165,250,0.13)',  stroke:'rgba(29,78,216,0.85)',  dash:[5,4] },
     VF: { pts:[[-0.75,0],[-0.75,-4.1],[-6,-9.45],[-6,0]],  fill:'rgba(251,191,36,0.13)',  stroke:'rgba(146,64,14,0.85)',  dash:[5,4] },
-    SD: { pts:[[0.25,0],[0.25,-2.5],[4,-2.5],[4,0]],        fill:'rgba(52,211,153,0.13)',  stroke:'rgba(4,120,87,0.85)',   dash:[5,4] },
+    SD: { pts:[[0.25,0],[0.25,-2.5],[4,-2.5],[4,0]],        fill:'rgba(194,65,12,0.00)',  stroke:'rgba(194,65,12,0.85)',   dash:[5,4] },
   },
 };
 
@@ -893,7 +877,7 @@ function drawLenormand(fl) {
       const labels = {
         CF: { c: centroid(REGIMES.lenormand.CF.pts), color:'rgba(29,78,216,0.85)',  text:'CF' },
         VF: { c: centroid(REGIMES.lenormand.VF.pts), color:'rgba(146,64,14,0.85)', text:'VF' },
-        SD: { c: centroid(REGIMES.lenormand.SD.pts), color:'rgba(4,120,87,0.85)',  text:'SD' },
+        SD: { c: centroid(REGIMES.lenormand.SD.pts), color:'rgba(194,65,12,0.90)',  text:'SD' },
       };
       for (const {c,color,text} of Object.values(labels)) {
         ctx.fillStyle = color;
@@ -1318,7 +1302,7 @@ function drawCCS() {
       'CO₂ density %{customdata[2]:.0f} kg/m³<br>' +
       '%{customdata[3]}<extra></extra>',
   });
-  mk(sc,  '#0f766e', 'circle',  'Site — supercritical CO₂');
+  mk(sc,  ACCENT, 'circle',  'Site — supercritical CO₂');
   mk(nsc, '#f59e0b', 'diamond', 'Site — NOT supercritical');
 
   // Current sidebar conditions, for comparison with the field sites
@@ -1357,7 +1341,7 @@ function drawCCS() {
     annotations: [
       { x: d.critical.T_C + 6, y: d.P_range[1] - 1.5, xanchor: 'left',
         text: '<b>supercritical</b>', showarrow: false,
-        font: { size: 11, color: '#0f766e' } },
+        font: { size: 11, color: ACCENT } },
       { x: d.critical.T_C - 6, y: d.P_range[1] - 1.5, xanchor: 'right',
         text: '<b>liquid</b>', showarrow: false,
         font: { size: 11, color: '#1d4ed8' } },
@@ -1438,31 +1422,23 @@ function buildCCSTable() {
 // giving L* 16 -> 86 monotonically. It also stays monotonic in greyscale, so
 // it survives printing in black and white.
 //
-// twilight is matplotlib's, sampled directly. It is CYCLIC — its two ends are
-// the same colour, rgb(226,217,226) — so on a non-cyclic property surface the
-// minimum and maximum render identically. Offered because it was asked for,
-// but the colourbar is ambiguous by construction.
-const CMAPS = {
-  brand: [[0.0000,"rgb(26,40,62)"],  [0.0833,"rgb(12,55,88)"],  [0.1667,"rgb(0,70,116)"],
-          [0.2500,"rgb(0,78,165)"],  [0.3333,"rgb(0,85,217)"],  [0.4167,"rgb(96,85,240)"],
-          [0.5000,"rgb(150,81,255)"],[0.5833,"rgb(231,82,170)"],[0.6667,"rgb(255,92,76)"],
-          [0.7500,"rgb(255,132,91)"],[0.8333,"rgb(255,165,107)"],[0.9167,"rgb(255,187,119)"],
-          [1.0000,"rgb(255,208,131)"]],
-  twilight: [[0.0000,"rgb(226,217,226)"],[0.0625,"rgb(196,206,212)"],[0.1250,"rgb(149,181,199)"],
-          [0.1875,"rgb(114,151,193)"],[0.2500,"rgb(98,118,186)"], [0.3125,"rgb(94,81,173)"],
-          [0.3750,"rgb(89,42,143)"],  [0.4375,"rgb(69,19,92)"],   [0.5000,"rgb(47,20,54)"],
-          [0.5625,"rgb(74,19,66)"],   [0.6250,"rgb(116,30,79)"],  [0.6875,"rgb(152,53,80)"],
-          [0.7500,"rgb(178,86,82)"],  [0.8125,"rgb(194,124,99)"], [0.8750,"rgb(204,163,137)"],
-          [0.9375,"rgb(216,199,190)"],[1.0000,"rgb(226,217,226)"]],
-  twilight_shifted: [[0.0000,"rgb(48,20,55)"], [0.0625,"rgb(69,19,92)"],  [0.1250,"rgb(89,42,143)"],
-          [0.1875,"rgb(94,81,173)"], [0.2500,"rgb(98,118,186)"],[0.3125,"rgb(114,151,193)"],
-          [0.3750,"rgb(149,181,199)"],[0.4375,"rgb(196,206,212)"],[0.5000,"rgb(226,217,226)"],
-          [0.5625,"rgb(216,199,190)"],[0.6250,"rgb(204,163,137)"],[0.6875,"rgb(194,124,99)"],
-          [0.7500,"rgb(178,86,82)"], [0.8125,"rgb(152,53,80)"], [0.8750,"rgb(116,30,79)"],
-          [0.9375,"rgb(74,19,66)"],  [1.0000,"rgb(47,20,54)"]],
-};
-const CYCLIC_CMAPS = ['twilight', 'twilight_shifted'];
-const cmapOf = name => CMAPS[name] || name;   // built-in Plotly names pass through
+// BRAND_CMAP is the only surface colourmap. Twilight was trialled and dropped:
+// it is cyclic, so its two ends are the same colour and the colourbar cannot be
+// read for magnitude on a non-cyclic property surface.
+//
+// ACCENT is the warm colour used wherever a non-phase highlight is needed
+// (field-site markers, the stable-displacement region, the CCS card header).
+// It is the palette's warm hue DARKENED: the literal top 15% of the ramp
+// (#ffa56b–#ffd083) measures only 1.4–1.9:1 against white, so it cannot carry
+// white header text or read as a label on the plot. #c2410c is the same hue
+// family at 5.18:1 on white text and 5.01:1 on the plot background.
+const BRAND_CMAP = [
+  [0.0000,"rgb(26,40,62)"],  [0.0833,"rgb(12,55,88)"],  [0.1667,"rgb(0,70,116)"],
+  [0.2500,"rgb(0,78,165)"],  [0.3333,"rgb(0,85,217)"],  [0.4167,"rgb(96,85,240)"],
+  [0.5000,"rgb(150,81,255)"],[0.5833,"rgb(231,82,170)"],[0.6667,"rgb(255,92,76)"],
+  [0.7500,"rgb(255,132,91)"],[0.8333,"rgb(255,165,107)"],[0.9167,"rgb(255,187,119)"],
+  [1.0000,"rgb(255,208,131)"]];
+const ACCENT = '#c2410c';
 
 // ══ Thermodynamic property surface ═══════════════════════════════════════════
 // Grid spans the app's own operating window, so the surface always covers the
@@ -1474,7 +1450,6 @@ const SURF_P_MIN = 0.1, SURF_P_MAX = 20;     // MPa  — matches P_MPa bounds
 
 const surf = {
   fluid: 'CO2',
-  cmap:  'brand',
   prop:  'speed_sound_m_s',
   data:  null,
   userPickedFluid: false,   // once true, stop following the NW selector
@@ -1545,11 +1520,6 @@ function populatePropSelect(d) {
   sel.dataset.filled = '1';
   sel.addEventListener('change', () => { surf.prop = sel.value; drawSurface(); });
 
-  const cs = $('surf-cmap');
-  if (cs && cs.dataset.bound !== '1') {
-    cs.dataset.bound = '1';
-    cs.addEventListener('change', () => { surf.cmap = cs.value; drawSurface(); });
-  }
 }
 
 function drawSurface() {
@@ -1575,7 +1545,7 @@ function drawSurface() {
 
   const traces = [{
     type: 'surface', x: d.T_C, y: d.P_MPa, z: z,
-    colorscale: cmapOf(surf.cmap), showscale: true,
+    colorscale: BRAND_CMAP, showscale: true,
     colorbar: { title: { text: useLog ? 'log₁₀' : (meta.unit === '—' ? '' : meta.unit),
                          side: 'right', font: { size: 11 } },
                 thickness: 14, len: 0.7, tickfont: { size: 10 } },
@@ -1659,10 +1629,6 @@ function drawSurface() {
     ${sat && sat.T_C.length ? 'Black curve on the floor is the vapour-pressure (saturation) line; the surface steps across it because the fluid changes phase. ' : ''}
     Amber diamond marks the conditions set in the sidebar. Drag to rotate.
     Surfaces are for the <em>pure</em> fluid — brine salt corrections are not applied here.
-    ${CYCLIC_CMAPS.includes(surf.cmap) ? `<br><span style="color:#b45309">
-      <strong>${surf.cmap.replace('_',' ')} is a cyclic colourmap</strong> — its two ends are the
-      same colour, so the lowest and highest values render identically and the colourbar is
-      ambiguous. Fine for seeing structure, not for reading magnitude off the colour.</span>` : ''}
   `;
 }
 
