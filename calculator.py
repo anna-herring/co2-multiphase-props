@@ -47,7 +47,6 @@ NW_FLUIDS = {
 
 W_FLUIDS = {
     "water":    {"label": "Freshwater",   "default_S": 0.0,   "default_ki": 0.0},
-    "seawater": {"label": "Seawater",     "default_S": 35.0,  "default_ki": 0.0},
     "brine":    {"label": "Saline Brine", "default_S": 100.0, "default_ki": 0.0},
     "ki_brine": {"label": "KI Brine",     "default_S": 0.0,   "default_ki": 0.5},
 }
