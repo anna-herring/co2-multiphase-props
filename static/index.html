@@ -473,7 +473,17 @@ let lenChart = null, forceChart = null;
 
 // ── DOM helpers ───────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
-const fmt = (v, dec=2) => (v == null || !isFinite(v)) ? '—' : Number(v).toFixed(dec);
+// Project-wide number format: 2 significant figures below 1, one decimal place
+// at or above 1. Keeps small values readable (4.6e-4 -> 0.00046) without
+// implying false precision on large ones (384.327 -> 384.3). The second
+// argument is ignored — call sites still pass a decimal count and are left
+// alone rather than edited one by one.
+const fmt = (v, _dec) => {
+  if (v == null || !isFinite(v)) return '—';
+  const a = Math.abs(v);
+  if (a === 0) return '0';
+  return a < 1 ? Number(v).toPrecision(2) : Number(v).toFixed(1);
+};
 
 // ── Sidebar toggle ────────────────────────────────────────────────────────────
 const sidebar = document.querySelector('aside');
@@ -674,12 +684,10 @@ function render(d) {
 
   // Secondary thermodynamic properties, appended to both phase cards.
   // [key, label, unit, decimal places]
+  // Isentropic compressibility, c_p, c_v and γ removed 2026-10-06 as surplus.
+  // They are still computed (γ drives the brine sound speed), just not shown.
   const THERMO_ROWS = [
     ['speed_sound_m_s',         'Speed of sound',                   'm/s',    1],
-    ['compressibility_s_1_GPa', 'Isentropic compress.',             'GPa⁻¹',  4],
-    ['cp_J_kgK',                'Specific heat c<sub>p</sub>',      'J/kg·K', 0],
-    ['cv_J_kgK',                'Specific heat c<sub>v</sub>',      'J/kg·K', 0],
-    ['gamma',                   'γ = c<sub>p</sub>/c<sub>v</sub>',  '',       3],
     ['expansivity_1_K',         'Thermal expansivity',              'K⁻¹',    5],
     ['conductivity_W_mK',       'Thermal conductivity',             'W/m·K',  4],
     ['joule_thomson_K_MPa',     'Joule–Thomson coeff.',             'K/MPa',  3],
@@ -1026,9 +1034,10 @@ function renderSensitivity(s, nwLabel, wLabel) {
   const el = $('sens-block');
   if (!s) { el.innerHTML = '<span style="color:var(--muted)">Not available.</span>'; return; }
 
-  const num = (v, dp = 2) => v == null
+  // Same rule as fmt(), with an explicit sign so direction is readable.
+  const num = v => v == null
     ? '<span style="color:var(--muted)">—</span>'
-    : `${v > 0 ? '+' : ''}${v.toFixed(dp)}`;
+    : `${v > 0 ? '+' : ''}${fmt(v)}`;
   const mult = v => v == null
     ? '<span style="color:var(--muted)">—</span>'
     : (v >= 10 ? `${Math.round(v)}×` : `${v.toFixed(1)}×`);
@@ -1078,8 +1087,8 @@ function renderSensitivity(s, nwLabel, wLabel) {
       <thead>
         <tr>
           <th rowspan="2" style="vertical-align:bottom">Property</th>
-          <th colspan="3" style="text-align:center">per °C &nbsp;[%/K]</th>
-          <th colspan="3" style="text-align:center;border-left:1px solid var(--border)">per MPa &nbsp;[%/MPa]</th>
+          <th colspan="3" style="text-align:center">per °C &nbsp;[${s.unit_T || '%/K'}]</th>
+          <th colspan="3" style="text-align:center;border-left:1px solid var(--border)">per 10 kPa &nbsp;[${s.unit_P || '%/10 kPa'}]</th>
         </tr>
         <tr>
           <th style="text-align:right">${nwLabel}</th>
@@ -1099,12 +1108,14 @@ function renderSensitivity(s, nwLabel, wLabel) {
       </tbody>
     </table></div>
     <div style="margin-top:10px;font-size:10.5px;color:var(--muted);line-height:1.6">
-      <strong style="color:var(--text)">S = (100/X)·dX/dT</strong>, the fractional change per °C
-      and per MPa. Normalised by X so properties with different units — and the two phases —
+      <strong style="color:var(--text)">S = (100/X)·dX/dT</strong>, the percentage change per °C
+      and per 10 kPa. Normalised by X so properties with different units — and the two phases —
       compare directly; a raw dX/dT comparison is skewed by the phases simply having
-      different magnitudes. Because log derivatives add through products, the derived rows
-      are exact decompositions, not separate estimates: they say <em>which</em> property
-      drives each output. Central differences, ±${s.dT_K} °C and ±${s.dP_MPa} MPa.
+      different magnitudes. Pressure is quoted per 10 kPa rather than per MPa because that is
+      the order of a realistic control tolerance. Because log derivatives add through products,
+      the derived rows are exact decompositions, not separate estimates: they say <em>which</em>
+      property drives each output. Central differences, ±${s.dT_K} °C and
+      ±${(s.dP_MPa*1000).toFixed(0)} kPa.
       Density's two entries are the thermal expansivity and isothermal compressibility
       reported above, so they double as a check on the method.
       Derived rows hold flow rate fixed. Near the critical point the derivative genuinely

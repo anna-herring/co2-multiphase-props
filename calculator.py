@@ -139,15 +139,17 @@ PROP_META = {
     "viscosity_uPas":           ("Dynamic viscosity",          "µPa·s",   True),
     "speed_sound_m_s":          ("Speed of sound",             "m/s",     False),
     "compressibility_1_GPa":    ("Isothermal compressibility",  "GPa⁻¹",  True),
-    "compressibility_s_1_GPa":  ("Isentropic compressibility",  "GPa⁻¹",  True),
-    "cp_J_kgK":                 ("Specific heat c_p",           "J/kg·K", True),
-    "cv_J_kgK":                 ("Specific heat c_v",           "J/kg·K", False),
-    "gamma":                    ("Heat capacity ratio γ",       "—",      True),
     "expansivity_1_K":          ("Thermal expansivity",         "1/K",    True),
     "conductivity_W_mK":        ("Thermal conductivity",        "W/m·K",  False),
     "joule_thomson_K_MPa":      ("Joule–Thomson coefficient",   "K/MPa",  False),
     "Z":                        ("Compressibility factor Z",    "—",      False),
 }
+
+# Still COMPUTED, but no longer displayed or offered as a surface (removed
+# from the UI 2026-10-06 as surplus). gamma cannot simply be dropped: the
+# brine sound speed comes from c = sqrt(gamma/(rho*kappa_T)) and kappa_s from
+# kappa_T/gamma, so _w_props depends on it. They stay in the returned dict.
+_INTERNAL_PROPS = ("compressibility_s_1_GPa", "cp_J_kgK", "cv_J_kgK", "gamma")
 
 # Order the property rows appear in the UI cards
 PROP_ORDER = list(PROP_META.keys())
@@ -168,7 +170,7 @@ def _coolprop_props(cp_name, T_K, P_Pa, state=None):
     the module docstring. AbstractState.speed_sound() is unambiguous, so all
     properties here come from the AbstractState API rather than output strings.
     """
-    out = {k: None for k in PROP_META}
+    out = {k: None for k in (*PROP_META, *_INTERNAL_PROPS)}
     out["phase"] = "Error"
     try:
         AS = state if state is not None else CP.AbstractState("HEOS", cp_name)
@@ -227,8 +229,10 @@ KAPPA_NACL = 0.112
 
 # Properties that carry NO salt correction and are reported as pure water.
 # Anything listed here must be flagged in the UI.
-_W_PURE_WATER_BASE = ["cp_J_kgK", "cv_J_kgK", "gamma", "expansivity_1_K",
-                      "conductivity_W_mK", "joule_thomson_K_MPa", "Z"]
+# Only DISPLAYED properties are listed — c_p, c_v and gamma are pure water too
+# but are no longer shown, so flagging them would be invisible noise.
+_W_PURE_WATER_BASE = ["expansivity_1_K", "conductivity_W_mK",
+                      "joule_thomson_K_MPa", "Z"]
 
 
 def _water_is_liquid(T_K, P_Pa):
@@ -276,7 +280,7 @@ def _w_props(T_K, P_Pa, S_g_L, ki_mol_L=0.0):
     # number. This also makes `flow` None downstream, so no Ca or Bo is
     # produced from a non-liquid wetting phase.
     if not _water_is_liquid(T_K, P_Pa):
-        out = {k: None for k in PROP_META}
+        out = {k: None for k in (*PROP_META, *_INTERNAL_PROPS)}
         out["water_not_liquid"]  = True
         out["uncorrected_props"] = []
         out["mu_water_Pas"]      = np.nan
@@ -724,7 +728,12 @@ def surface_grid(fluid_key, T_min_C, T_max_C, P_min_MPa, P_max_MPa,
 #
 # Relative (logarithmic) sensitivity:
 #
-#     S_T = (100/X)·dX/dT  [%/K]        S_P = (100/X)·dX/dP  [%/MPa]
+#     S_T = (100/X)·dX/dT  [%/K]        S_P = (100/X)·dX/dP  [%/10 kPa]
+#
+# Pressure is reported per 10 kPa rather than per MPa because 10 kPa is the
+# order of a realistic pressure-control tolerance; per-MPa values run to
+# hundreds near the critical point and read as implausible. 1 %/MPa =
+# 0.01 %/10 kPa, so the conversion is a factor of 100 (SENS_P_SCALE).
 #
 # Normalised by X so that properties with different units, and the two phases,
 # are directly comparable -- a raw dX/dT comparison between CO2 and brine is
@@ -744,7 +753,8 @@ def surface_grid(fluid_key, T_min_C, T_max_C, P_min_MPa, P_max_MPa,
 # reported. It reproduces them to 6 figures, which is a free check on the method.
 
 SENS_DT = 0.05     # K,   converged (see below)
-SENS_DP = 0.005    # MPa
+SENS_DP = 0.005    # MPa, the differencing half-step (5 kPa)
+SENS_P_SCALE = 0.01   # %/MPa -> %/10 kPa
 
 # Step size matters near the critical point, where the derivative genuinely
 # diverges: CO2 density at 32 °C/7.5 MPa reads -63 %/K at a 0.5 K step but
@@ -773,7 +783,7 @@ def _rel_sens(f, T_C, P_MPa):
         if any(v is None or not np.isfinite(v) for v in (tp, tm, pp, pm)):
             return None, None
         return (_safe(100 * (tp - tm) / (2 * SENS_DT) / x0),
-                _safe(100 * (pp - pm) / (2 * SENS_DP) / x0))
+                _safe(100 * (pp - pm) / (2 * SENS_DP) / x0 * SENS_P_SCALE))
     except Exception:
         return None, None
 
@@ -832,6 +842,7 @@ def sensitivity_block(T_C, P_MPa, nw_id, S_g_L, ki_mol_L=0.0):
 
     return {
         "dT_K": SENS_DT, "dP_MPa": SENS_DP,
+        "unit_T": "%/K", "unit_P": "%/10 kPa",
         "rows": rows,
         "ift":  {"S_T": sigT, "S_P": sigP, "clamped": bool(sigma_clamped)},
         "drho": {"S_T": dT_, "S_P": dP_},
