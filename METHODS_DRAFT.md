@@ -282,6 +282,7 @@ Mihályi-Répcelak, which are not plotted.]
 - Baklid, A., Korbøl, R., & Owren, G. (1996). Sleipner Vest CO₂ disposal, CO₂ injection into a shallow underground aquifer. Society of Petroleum Engineers, SPE paper 36600.
 - Bell, I. H., Wronski, J., Quoilin, S., & Lemort, V. (2014). Pure and pseudo-pure fluid thermophysical property evaluation and the open-source thermophysical property library CoolProp. *Ind. Eng. Chem. Res.*, 53(6), 2498–2508.
 - Bickle, M., Chadwick, A., Huppert, H. E., Hallworth, M., & Lyle, S. (2007). Modelling carbon dioxide accumulation at Sleipner: implications for underground carbon storage. *Earth Planet. Sci. Lett.*, 255, 164–176.
+- Duan, Z., & Sun, R. (2003). An improved model calculating CO₂ solubility in pure water and aqueous NaCl solutions from 273 to 533 K and from 0 to 2000 bar. *Chem. Geol.*, 193, 257.
 - Duan, Z., Sun, R., Zhu, C., & Chou, I. M. (2006). An improved model for the calculation of CO₂ solubility in aqueous solutions containing Na⁺, K⁺, Ca²⁺, Mg²⁺, Cl⁻, and SO₄²⁻. *Marine Chemistry*, 98, 131.
 - Fenghour, A., Wakeham, W. A., & Vesovic, V. (1998). The viscosity of carbon dioxide. *J. Phys. Chem. Ref. Data*, 27, 31–39.
 - Fernández-Prini, R., Alvarez, J. L., & Harvey, A. H. (2003). Henry's constants and vapor–liquid distribution constants for gaseous solutes in H₂O and D₂O at high temperatures. *J. Phys. Chem. Ref. Data*, 32(2), 903–916.
