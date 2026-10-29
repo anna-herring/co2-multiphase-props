@@ -1196,7 +1196,7 @@ function renderSensitivity(s, nwLabel, wLabel, salted) {
       the derived rows are exact decompositions, not separate estimates: they say <em>which</em>
       property drives each output. Central differences, ±${s.dT_K} °C and
       ±${+(s.dP_MPa*1000).toFixed(2)} kPa.
-      ${salted ? '' : 'Density\'s two entries are the thermal expansivity and isothermal compressibility reported above, so they double as a check on the method.'}
+      ${salted ? '' : 'The CO₂ density sensitivities are finite differences of the density values. They should match the thermal expansivity and isothermal compressibility in the CO₂ card above, and that agreement is a check on the method.'}
       Derived rows hold flow rate fixed. Near the critical point the derivative genuinely
       diverges, so values there are large and step-dependent — read them as magnitude,
       not as a precise figure.
