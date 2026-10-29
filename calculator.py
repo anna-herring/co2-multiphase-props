@@ -7,7 +7,7 @@ surfaces over a (T, P) grid (see surface_grid).
     compressibility, c_p, c_v, gamma, thermal expansivity, thermal
     conductivity, Joule-Thomson coefficient, Z   : CoolProp
   - Brine corrections                    : Rowe & Chou (1970); Mao & Duan (2009)
-  - CO2 solubility (water + NaCl brine)   : Duan & Sun (2006) Marine Chemistry,
+  - CO2 solubility (water + NaCl brine)   : Duan et al. (2006), Marine Chemistry,
         with fugacity from the Duan, Moller & Weare (1992) BWR EOS
   - CO2 solubility (KI), H2/N2            : Henry's law + Krichevsky-Kasarnovsky
         (solubility is NO LONGER REPORTED as of 2026-10-08 -- the validated
@@ -952,7 +952,7 @@ _DUAN_A = (8.99288497e-2, -4.94783127e-1, 4.77922245e-2, 1.03808883e-2,
 def _co2_fugacity_coeff_duan(T_K, P_MPa):
     """
     CO2 fugacity coefficient from the Duan, Moller & Weare (1992) BWR-type EOS,
-    as used inside Duan & Sun (2003, 2006). Must be used instead of Span &
+    as used inside Duan et al. (2006) and Duan & Sun (2003). Must be used instead of Span &
     Wagner: the mu0 parameterisation is calibrated against THIS EOS.
 
     Reduced variables use the Duan reference constants Tc=304.1282 K,
@@ -994,7 +994,7 @@ def _co2_fugacity_coeff_duan(T_K, P_MPa):
 
 def _co2_solubility_duan_sun(T_K, P_MPa, m_NaCl):
     """
-    CO2 solubility in NaCl brine, Duan & Sun (2006) Marine Chemistry 98, 131-139.
+    CO2 solubility in NaCl brine, Duan et al. (2006), Marine Chemistry 98, 131.
     doi:10.1016/j.marchem.2005.09.001
 
     ln(m_CO2) = ln(y_CO2 * phi * P) - mu0/RT - 2*lam*m_Na - zeta*m_Na*m_Cl
@@ -1036,9 +1036,9 @@ def _solubility(nw_id, T_K, P_MPa, mu_w_Pas, S_g_L, ki_mol_L=0.0):
     """
     Mole fraction solubility of NW gas in the wetting phase.
 
-    CO2 (water, NaCl brine, KI brine): Duan & Sun (2006) Marine Chemistry,
+    CO2 (water, NaCl brine, KI brine): Duan et al. (2006), Marine Chemistry,
       doi:10.1016/j.marchem.2005.09.001. NaCl salting-out is intrinsic to that
-      model; KI is applied as a Sechenov factor ON TOP of the Duan & Sun
+      model; KI is applied as a Sechenov factor ON TOP of the Duan et al.
       pure-water baseline, so freshwater and dilute KI agree in the limit.
     H2 / N2: Henry's law + Krichevsky-Kasarnovsky pressure correction
       + Sechenov salting-out (Schumpe 1993).
@@ -1054,7 +1054,7 @@ def _solubility(nw_id, T_K, P_MPa, mu_w_Pas, S_g_L, ki_mol_L=0.0):
     xs_pure = fug_MPa / KK          # pure-water mole fraction (Henry+KK)
 
     if nw_id == "CO2":
-        # ── Duan & Sun (2006): NaCl enters the model directly; KI rides on top
+        # ── Duan et al. (2006): NaCl enters the model directly; KI rides on top
         #    of the same pure-water baseline as a Sechenov factor, so that
         #    KI -> 0 reproduces freshwater instead of jumping to Henry's law.
         m_NaCl = 0.0 if ki_mol_L > 0 else S_g_L / (Mw_NaCl * 1000)
@@ -1936,7 +1936,7 @@ def calculate(T_C: float, P_MPa: float, nw_id: str, w_id: str,
 
     # ── Interaction / transport ───────────────────────────────────────────────
     # Solubility removed from the response 2026-10-08 (not needed for this
-    # tool). The whole validated solubility path (_solubility, Duan & Sun,
+    # tool). The whole validated solubility path (_solubility, Duan et al.,
     # Duan 1992 EOS, Henry+KK) is retained below; restoring it is one
     # _solubility() call here plus a "solubility" key in `interaction` and
     # the three UI rows.

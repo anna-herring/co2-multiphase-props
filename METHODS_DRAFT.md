@@ -157,9 +157,9 @@ of state with the Panagiotopoulos–Reid combining rule. Henry's constant
 paper's polynomials reproduce the underlying correlations in the implementation
 to 0.2% for the saturated-water fugacity times pressure (275–473 K), 0.02% for
 the saturated molar volume, and 0.3% for Henry's constant. The calculated CO₂
-solubilities agree with the Duan & Sun (2006) model to within 3% at 5–10 MPa
+solubilities agree with the Duan et al. (2006) model to within 3% at 5–10 MPa
 from 323 to 423 K (pure water and 1–2 mol kg⁻¹ NaCl) and to within ~5% at
-20 MPa above 373 K. At lower temperatures and higher pressures the Duan & Sun
+20 MPa above 373 K. At lower temperatures and higher pressures the Duan et al.
 values are higher (by 16% at 323 K and 20 MPa, and by ~30% at 283–298 K and
 20 MPa); that is the liquid-CO₂ region. This comparison does not establish
 which model is closer to experiment there, and the present application uses the
@@ -282,19 +282,19 @@ Mihályi-Répcelak, which are not plotted.]
 - Baklid, A., Korbøl, R., & Owren, G. (1996). Sleipner Vest CO₂ disposal, CO₂ injection into a shallow underground aquifer. Society of Petroleum Engineers, SPE paper 36600.
 - Bell, I. H., Wronski, J., Quoilin, S., & Lemort, V. (2014). Pure and pseudo-pure fluid thermophysical property evaluation and the open-source thermophysical property library CoolProp. *Ind. Eng. Chem. Res.*, 53(6), 2498–2508.
 - Bickle, M., Chadwick, A., Huppert, H. E., Hallworth, M., & Lyle, S. (2007). Modelling carbon dioxide accumulation at Sleipner: implications for underground carbon storage. *Earth Planet. Sci. Lett.*, 255, 164–176.
-- Duan, Z., & Sun, R. (2006). *Marine Chemistry*, 98, 131–139. [Full title to be confirmed; cited for the CO₂ solubility comparison in §4.]
-- Fenghour, A., Wakeham, W. A., & Vesovic, V. (1998). The viscosity of carbon dioxide. *J. Phys. Chem. Ref. Data*, 27(1), 31–44.
+- Duan, Z., Sun, R., Zhu, C., & Chou, I. M. (2006). An improved model for the calculation of CO₂ solubility in aqueous solutions containing Na⁺, K⁺, Ca²⁺, Mg²⁺, Cl⁻, and SO₄²⁻. *Marine Chemistry*, 98, 131.
+- Fenghour, A., Wakeham, W. A., & Vesovic, V. (1998). The viscosity of carbon dioxide. *J. Phys. Chem. Ref. Data*, 27, 31–39.
 - Fernández-Prini, R., Alvarez, J. L., & Harvey, A. H. (2003). Henry's constants and vapor–liquid distribution constants for gaseous solutes in H₂O and D₂O at high temperatures. *J. Phys. Chem. Ref. Data*, 32(2), 903–916.
 - Hansen, O., Eiken, O., Østmo, S., Johansen, R. I., & Smith, A. (2011). Monitoring CO₂ injection into a fluvial brine-filled sandstone formation at the Snøhvit field, Barents Sea. Society of Exploration Geophysicists, Expanded Abstract SEG-2011-4092.
 - Hansen, O., Gilding, D., Nazarian, B., Osdal, B., Ringrose, P., Kristoffersen, J.-B., Eiken, O., & Hansen, H. (2013). Snøhvit: the history of injecting and storing 1 Mt CO₂ in the fluvial Tubåen Fm. *Energy Procedia*, 37, 3565–3573. [Imre et al. print the pages as 356–3573.]
-- Huber, M. L., et al. (2009). New international formulation for the viscosity of H₂O. *J. Phys. Chem. Ref. Data*, 38(2), 101–125.
+- Huber, M. L., Perkins, R. A., Laesecke, A., Friend, D. G., Sengers, J. V., Assael, M. J., Metaxa, I. N., Vogel, E., Mareš, R., & Miyagawa, K. (2009). New international formulation for the viscosity of H₂O. *J. Phys. Chem. Ref. Data*, 38, 101.
 - Imre, A. R., Ramboz, C., Deiters, U. K., & Kraska, T. (2015). Anomalous fluid properties of carbon dioxide in the supercritical region: application to geological CO₂ storage and related hazards. *Environ. Earth Sci.*, 73, 4373–4384. doi:10.1007/s12665-014-3716-5
 - Kempka, T., & Kühn, M. (2013). Numerical simulations of CO₂ arrival times and reservoir pressure coincide with observations from the Ketzin pilot site, Germany. *Environ. Earth Sci.*, 70, 3675–3685.
 - Kikuta, K., Hongo, S., Tanase, D., & Ohsumi, T. (2005). Field test of CO₂ injection in Nagaoka, Japan. In *Proceedings of the 7th International Conference on Greenhouse Gas Control Technologies*, 1367–1372.
 - Laliberté, M. (2009). A model for calculating the heat capacity of aqueous solutions, with updated density and viscosity data. *J. Chem. Eng. Data*, 54(6), 1725–1760. doi:10.1021/je8008123.
 - Lenormand, R., Touboul, E., & Zarcone, C. (1988). Numerical models and experiments on immiscible displacements in porous media. *J. Fluid Mech.*, 189, 165–187.
 - Loizzo, M., Henninges, J., Zimmer, M., & Liebscher, A. (2013). Multi-phase equilibrium in a CO₂-filled observation well at the Ketzin pilot site. *Energy Procedia*, 37, 3621–3629.
-- McBride-Wright, M., Maitland, G. C., & Trusler, J. P. M. (2015). [Partial molar volume of CO₂ at infinite dilution in water; full reference to be confirmed. Cited in §4 for V̄₁^∞.]
+- McBride-Wright, M., Maitland, G. C., & Trusler, J. P. M. (2015). Viscosity and density of aqueous solutions of carbon dioxide at temperatures from (274 to 449) K and at pressures up to 100 MPa. *J. Chem. Eng. Data*, 60(1), 171–180.
 - Mutailipu, M., Song, Y., Yao, Q., Liu, Y., & Trusler, J. P. M. (2024). Solubility and interfacial tension models for CO₂–brine systems under CO₂ geological storage conditions. *Fuel*, 357, 129712.
 - Panagiotopoulos, A. Z., & Reid, R. C. (1986). New mixing rules for cubic equations of state for highly polar, asymmetric systems. *ACS Symp. Ser.*, 300, 571–582.
 - Peng, D.-Y., & Robinson, D. B. (1976). A new two-constant equation of state. *Ind. Eng. Chem. Fundam.*, 15(1), 59–64.

@@ -11,7 +11,7 @@ Equation and table numbers below are the paper's.
     activity model (Eqs 20-26, Table 8); non-aqueous phase = Peng-Robinson EoS
     with the Panagiotopoulos-Reid combining rule (Eqs 17-19, A-1..A-7).
     K1, K2 from the polynomial forms of Fernandez-Prini / IAPWS-95 /
-    McBride-Wright (Eqs 13-16, Table 4).
+    McBride-Wright et al. (2015) (Eqs 13-16, Table 4).
   * IFT (Sec. 3): gamma = gamma_b - dgamma(tau, x1), with x1 the CO2 mole
     fraction in the aqueous phase from the solubility model (Eqs 30-42,
     Table 11).
