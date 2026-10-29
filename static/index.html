@@ -120,6 +120,21 @@
     color: var(--muted); font-size: 10px; font-weight: 600;
     vertical-align: super; cursor: help;
   }
+  /* Out-of-source-range flags: red flag + how the value is estimated */
+  .rflag { color: #dc2626; font-weight: 700; }
+  .rflag-detail {
+    display: block; margin-top: 2px; color: #b91c1c;
+    font-size: 11px; font-weight: 500; line-height: 1.35;
+  }
+  .rflag-detail + .rflag-detail { margin-top: 4px; }
+  #range-banner:not(:empty) {
+    margin-bottom: 14px; padding: 10px 14px; border-radius: 8px;
+    background: #fef2f2; border: 1.5px solid #fca5a5; color: #7f1d1d;
+    font-size: 12.5px; line-height: 1.45;
+  }
+  #range-banner ul { margin: 6px 0 0 18px; padding: 0; }
+  #range-banner li { margin-bottom: 4px; }
+  #range-banner .src { color: #991b1b; opacity: .8; }
 
   /* ── Main tabs ── */
   .tabs {
@@ -173,11 +188,15 @@
   .state-chip { display: flex; align-items: center; gap: 5px; font-size: 13px; }
   .state-chip .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
-  /* 2-col asymmetric: left col (NW+W stacked) | right col (Interface) */
-  .grid-props { display: grid; grid-template-columns: 1fr 1.4fr; gap: 16px; }
-  .grid-props-left { display: flex; flex-direction: column; gap: 16px; }
+  /* Tabulated values: 2 x 2 -- CO2 | wetting phase, then Interface & Transport |
+     Sensitivity -- when the main panel is wide enough for two cards of at least
+     520 px, otherwise all four stacked in one column. auto-fit does the switch, so
+     there is no fixed breakpoint to guess (the sidebar width changes the room). */
+  .tables-grid { display: grid; gap: 16px; align-items: start;
+                 grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); }
+  #prop-grid { display: contents; }   /* its three cards join .tables-grid directly */
   .grid2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 16px; }
-  @media (max-width: 1100px) { .grid-props, .grid2 { grid-template-columns: 1fr; } }
+  @media (max-width: 1100px) { .grid2 { grid-template-columns: 1fr; } }
 
   .card { background: var(--panel); border-radius: var(--radius);
           border: 1px solid var(--border); box-shadow: var(--shadow); overflow: hidden; }
@@ -281,14 +300,14 @@
     <div id="salinity-wrap">
       <div class="num-row" style="margin-top:8px">
         <span class="param-name">NaCl concentration</span>
-        <input type="number" id="S-inp" value="1.0" min="0.1" max="6.0" step="0.1">
+        <input type="number" id="S-inp" value="1.0" min="0.1" max="2.0" step="0.1">
         <span class="unit">mol/L</span>
       </div>
     </div>
     <div id="ki-wrap" style="display:none">
       <div class="num-row" style="margin-top:8px">
         <span class="param-name">KI concentration</span>
-        <input type="number" id="KI-inp" value="1.0" min="0" max="1.5" step="0.1">
+        <input type="number" id="KI-inp" value="1.0" min="0" max="2.0" step="0.1">
         <span class="unit">mol/L</span>
       </div>
     </div>
@@ -346,12 +365,10 @@
   <div style="font-size:11px;color:var(--muted);line-height:1.7">
     <strong style="color:var(--text)">EoS validity (CoolProp):</strong><br>
     CO₂: Span &amp; Wagner (1996) — 216–1100 K, 0–800 MPa ✓<br>
-    Note: CO₂ below T<sub>c</sub>=31.1 °C may be liquid/two-phase<br>
-    IFT tables: 10–200 °C (10–20 °C extrapolated)<br>
-    Brine: Rowe &amp; Chou (1970); Mao &amp; Duan (2009)<br>
-    Solubility: Henry + KK correction<br>
-    Diffusivity: Stokes–Einstein<br>
-    Diagrams: Lenormand et al. (1988)
+    Note: CO₂ below T<sub>c</sub>=31.0 °C may be liquid/two-phase<br>
+    IFT: Mutailipu et al. (2024) — 0–200 °C, ≤ 70 MPa, ≤ 5 mol/kg<br>
+    Brine density &amp; viscosity: Laliberté (2009)<br>
+    Diagrams: Lenormand et al. (1988); Zhang et al. (2011); Polak et al. (2011)
   </div>
 </aside>
 
@@ -371,13 +388,16 @@
     <!-- ══ Tab: tabulated values ══════════════════════════════════════════ -->
     <div class="pane" id="pane-tables">
 
-      <div class="grid-props" id="prop-grid"></div>
+      <div id="range-banner"></div>
 
-      <div class="card" style="margin-top:14px">
-        <div class="card-head" style="background:#b45309">
-          Sensitivity to Temperature &amp; Pressure
+      <div class="tables-grid">
+        <div id="prop-grid"></div>   <!-- CO2, wetting phase, Interface & Transport -->
+        <div class="card">
+          <div class="card-head" style="background:#b45309">
+            Sensitivity to Temperature &amp; Pressure
+          </div>
+          <div id="sens-block" style="padding:12px 14px 14px"></div>
         </div>
-        <div id="sens-block" style="padding:12px 14px 14px"></div>
       </div>
 
       <div class="source-note" id="source-note"></div>
@@ -459,6 +479,12 @@
 
 <script>
 // ── App state ─────────────────────────────────────────────────────────────────
+// Where the calculation API lives. Served by FastAPI (local, Render): same
+// origin, so ''. Served from GitHub Pages: the Render backend. Set RENDER_API
+// to the Render service URL once it exists.
+const RENDER_API = 'https://co2-multiphase-props.onrender.com';
+const API = location.hostname.endsWith('github.io') ? RENDER_API : '';
+
 const state = { T:50, P:10.0, theta:10, nw:'CO2', w:'water', S:1.0, KI:1.0,
                 Q:1.0, Ca:1e-5, mode:'q', diam:10.0, phi:0.22, L:40.0 };
 let debounceTimer = null;
@@ -471,6 +497,9 @@ const $ = id => document.getElementById(id);
 // implying false precision on large ones (384.327 -> 384.3). The second
 // argument is ignored — call sites still pass a decimal count and are left
 // alone rather than edited one by one.
+// Shown on the IFT value for KI brine, for which no CO₂/brine IFT measurement exists.
+const IFT_ESTIMATE_BADGE = ' <span class="uncorr" title="ESTIMATE. No CO₂/KI IFT measurements exist, and the Mutailipu et al. (2024) model has no iodide. Its brine term depends only on the charge-weighted CATION molality, so KI is treated as a 1:1 potassium salt at its own molality. Whether iodide behaves like chloride at the CO₂/water interface has not been measured.">estimate</span>';
+
 const fmt = (v, _dec) => {
   if (v == null || !isFinite(v)) return '—';
   const a = Math.abs(v);
@@ -519,8 +548,11 @@ const fmtSciPlain = (v, dec=2) => {
     state.T     = +$('T-inp').value;
     state.P     = +$('P-inp').value;
     state.theta = +$('theta-inp').value;
-    state.S     = +$('S-inp').value;
-    state.KI    = +$('KI-inp').value;
+    // A number input's max does not stop typing, so clamp salt to the fitted range (2 mol/L).
+    state.S     = Math.min(Math.max(+$('S-inp').value, 0.1), 2.0);
+    state.KI    = Math.min(Math.max(+$('KI-inp').value, 0), 2.0);
+    $('S-inp').value = state.S;
+    $('KI-inp').value = state.KI;
     state.Q     = +$('Q-inp').value;
     state.diam  = +$('diam-inp').value;
     state.phi   = +$('phi-inp').value;
@@ -583,7 +615,7 @@ async function fetchData() {
     theta_deg: state.theta,
   };
   try {
-    const res = await fetch('/api/calculate', { method:'POST',
+    const res = await fetch(API + '/api/calculate', { method:'POST',
       headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
     if (!res.ok) throw new Error(`Server ${res.status}`);
     const data = await res.json();
@@ -607,7 +639,7 @@ function phaseCls(p) {
 
 // ── Render ────────────────────────────────────────────────────────────────────
 function render(d) {
-  const nw = d.nw, w = d.wetting, ix = d.interaction, sol = ix.solubility, fl = d.flow;
+  const nw = d.nw, w = d.wetting, ix = d.interaction, fl = d.flow;
 
   // State bar
   $('state-bar').innerHTML = `
@@ -625,23 +657,38 @@ function render(d) {
   `;
 
   // ── Property cards ──────────────────────────────────────────────────────────
-  // "pw" marker for a value the backend reports as pure water because no salt
-  // correction could be sourced (see calculator._w_props).
-  const pwFlag = (o, k) => (o.uncorrected_props || []).includes(k)
-    ? ' <span class="uncorr" title="Pure-water value — no salt correction applied">pw</span>'
-    : '';
-
   const nwRows = [
     ['Density',            `${fmt(nw.density_kg_m3,1)} kg/m³`],
     ['Dynamic viscosity',  `${fmt(nw.viscosity_uPas,2)} µPa·s`],
-    ['Isotherm. compress.',nw.compressibility_1_GPa != null ? `${fmt(nw.compressibility_1_GPa,3)} GPa⁻¹` : '—'],
-    ['Molar mass',         `${fmt(nw.Mw_g_mol,2)} g/mol`],
     ['Phase state',        nw.phase ? `<span class="phase-badge ${phaseCls(nw.phase)}">${nw.phase}</span>` : '—'],
   ];
 
   // Below water's saturation pressure the wetting phase is steam, and the
   // brine correlations do not apply — the backend blanks them and sets this.
   const wNotLiquid = !!w.water_not_liquid;
+  // Laliberté (2009) was fitted at ~1 atm over limited T and mass-fraction ranges
+  // (NaCl: density 0–140 °C, viscosity 5–154 °C, w ≤ 0.264; KI: density 0–100 °C,
+  // viscosity 5–95 °C, w ≤ 0.627). Outside them the salt effect is held at the edge.
+  // Out-of-source-range flags (backend `range_flags`): a red flag on the row plus
+  // a line saying how the value is estimated. Grouped by where they belong.
+  const flags = d.range_flags || [];
+  const flagsAt = at => flags.filter(f => f.applies_to === at);
+  const redFlag = at => {
+    const fs = flagsAt(at);
+    if (!fs.length) return '';
+    return ' <span class="rflag" title="Outside the published range of its source">⚑</span>'
+      + fs.map(f => `<span class="rflag-detail"><strong>Outside ${f.source}:</strong> ${f.outside}.
+          <em>Estimated: ${f.estimated_by}.</em></span>`).join('');
+  };
+  const brineBadge = at => redFlag(at);
+
+  // Summary banner above the cards (same content, one place, easy to miss otherwise)
+  $('range-banner').innerHTML = flags.length
+    ? `<strong><span class="rflag">⚑</span> ${flags.length === 1 ? 'One value is' : flags.length + ' values are'}
+        outside the published range of ${flags.length === 1 ? 'its source' : 'their sources'}</strong>
+       <ul>${flags.map(f => `<li><strong>${f.quantity}</strong> <span class="src">— ${f.source}</span>:
+         ${f.outside}. <em>Estimated: ${f.estimated_by}.</em></li>`).join('')}</ul>`
+    : '';
 
   const wRows = wNotLiquid ? [
     ['Phase state', '<span class="phase-badge phase-gas">Not liquid</span>'],
@@ -651,10 +698,8 @@ function render(d) {
       + 'and are not reported here. Raise the pressure above P<sub>sat</sub> '
       + 'to get wetting-phase properties, Ca and Bo.</span>'],
   ] : [
-    ['Density',            `${fmt(w.density_kg_m3,1)} kg/m³`],
-    ['Dynamic viscosity',  `${fmt(w.viscosity_uPas,2)} µPa·s`],
-    ['Isotherm. compress.' + pwFlag(w,'compressibility_1_GPa'),
-      w.compressibility_1_GPa != null ? `${fmt(w.compressibility_1_GPa,4)} GPa⁻¹` : '—'],
+    ['Density' + brineBadge('w_density'),       `${fmt(w.density_kg_m3,1)} kg/m³`],
+    ['Dynamic viscosity' + brineBadge('w_viscosity'), `${fmt(w.viscosity_uPas,2)} µPa·s`],
     ['Salinity', w.ki_mol_L > 0
       ? `${w.ki_mol_L.toFixed(2)} mol/L KI`
       : w.salinity_g_L > 0
@@ -662,43 +707,41 @@ function render(d) {
         : '0 (freshwater)'],
   ];
 
-  // Interaction card: IFT, solubility, diffusivity only (ratios moved to flow section)
+  // Interaction card: IFT (diffusivity removed 2026-10-14; ratios moved to flow section;
+  // solubility removed 2026-10-08 — backend path retained, see calculator.py)
   const ixRows = [
-    ['Interfacial tension' + (ix.ift_out_of_range
-      ? ' <span class="uncorr" title="Outside the measured IFT table (10–200 °C, 0.1–20 MPa) — held at the nearest edge value, not interpolated from data">clamped</span>'
-      : ''),
-      `${fmt(ix.ift_mN_m,1)} mN/m`],
-    ['Solubility (mol frac)', sol.mol_frac != null ? fmtSci(sol.mol_frac,3) : '—'],
-    ['Solubility (mg/L)',     `${fmt(sol.mg_L,1)} mg/L`],
-    ['Solubility (mmol/L)',   `${fmt(sol.mmol_L,2)} mmol/L`],
-    ['CO₂ diffusivity in water',  ix.diffusivity_m2_s != null
-      ? `${(ix.diffusivity_m2_s*1e9).toFixed(2)}×10⁻⁹ m²/s` : '—'],
+    ['Interfacial tension' + redFlag('ift')
+      // fallback only: backend says out of range but supplied no explanation
+      + (ix.ift_out_of_range && !flagsAt('ift').length
+        ? ' <span class="rflag" title="Outside the validity range of the IFT model.">⚑</span>'
+        : '') + (ix.ift_is_estimate ? IFT_ESTIMATE_BADGE : ''),
+      // blank when water is steam: there is no CO2-water interface below its vapour pressure
+      ix.ift_mN_m == null && wNotLiquid
+        ? '<span style="color:#b45309">— <span style="font-size:11px">water is steam here (P below its vapour pressure), so there is no CO₂–water interface</span></span>'
+        : `${fmt(ix.ift_mN_m,1)} mN/m`],
   ];
 
   // Secondary thermodynamic properties, appended to both phase cards.
   // [key, label, unit, decimal places]
   // Isentropic compressibility, c_p, c_v and γ removed 2026-10-06 as surplus.
-  // They are still computed (γ drives the brine sound speed), just not shown.
+  // The wetting-phase values are ALWAYS pure water (only its density and
+  // viscosity carry a salt correction), which its section heading says.
   const THERMO_ROWS = [
     ['speed_sound_m_s',         'Speed of sound',                   'm/s',    1],
+    ['compressibility_1_GPa',   'Isotherm. compress.',              'GPa⁻¹',  3],
     ['expansivity_1_K',         'Thermal expansivity',              'K⁻¹',    5],
     ['conductivity_W_mK',       'Thermal conductivity',             'W/m·K',  4],
     ['joule_thomson_K_MPa',     'Joule–Thomson coeff.',             'K/MPa',  3],
     ['Z',                       'Compressibility factor Z',         '',       4],
   ];
 
-  function thermoSection(o) {
-    // Sound speed is salt-corrected, but built with pure-water γ. That biases
-    // it LOW by ~0.5% per mol/kg, one-directionally — marked rather than hidden.
-    const gammaFlag = k => (k === 'speed_sound_m_s' && o.gamma_is_pure_water)
-      ? ' <span class="uncorr" title="Derived from c = √(γ/ρκ_T) using the salt-corrected density and compressibility but the PURE-WATER heat capacity ratio γ. True brine γ is higher by ~1% per mol/kg, so this reads low by roughly 0.5% per mol/kg (≈0.6% at 1 mol/kg, ≈1.8% at 3 mol/kg).">γ</span>'
-      : '';
+  function thermoSection(o, title) {
     const rows = THERMO_ROWS.map(([k, lab, unit, dp]) => {
       const v = o[k];
       const val = v == null ? '—' : `${fmt(v, dp)}${unit ? ' ' + unit : ''}`;
-      return `<tr><td>${lab}${pwFlag(o, k)}${gammaFlag(k)}</td><td>${val}</td></tr>`;
+      return `<tr><td>${lab}</td><td>${val}</td></tr>`;
     }).join('');
-    return `<tr class="section-head"><td colspan="2">Thermodynamic Properties</td></tr>${rows}`;
+    return `<tr class="section-head"><td colspan="2">${title || 'Thermodynamic Properties'}</td></tr>${rows}`;
   }
 
   function makeCard(title, color, rows, extraSection) {
@@ -733,18 +776,17 @@ function render(d) {
     `;
   }
 
-  // Layout: NW + W stacked on left, Interface+Transport on right
+  // Layout: three cards here (#prop-grid is display:contents) plus the sensitivity
+  // card that follows it, so the grid reads CO2 | wetting, Interface | Sensitivity.
   $('prop-grid').innerHTML = `
-    <div class="grid-props-left">
-      ${makeCard(`${nw.label} — Nonwetting Phase`, nw.color, nwRows, thermoSection(nw))}
-      ${makeCard(`${w.label} — Wetting Phase`, '#0369a1', wRows,
-                 wNotLiquid ? '' : thermoSection(w))}
-    </div>
+    ${makeCard(`${nw.label} — Nonwetting Phase`, nw.color, nwRows, thermoSection(nw))}
+    ${makeCard(`${w.label} — Wetting Phase`, '#0369a1', wRows,
+               wNotLiquid ? '' : thermoSection(w, 'Pure Water Thermodynamic Properties'))}
     ${makeCard('Interface &amp; Transport', '#7c3aed', ixRows, flowSection)}
   `;
 
   // ── Sensitivity ─────────────────────────────────────────────────────────────
-  renderSensitivity(d.sensitivity, nw.label, w.label);
+  renderSensitivity(d.sensitivity, nw.label, w.label, (w.salinity_g_L > 0 || w.ki_mol_L > 0));
 
   // ── Charts ──────────────────────────────────────────────────────────────────
   drawLenormand(fl);
@@ -759,16 +801,17 @@ function render(d) {
   $('source-note').innerHTML = `
     <strong>Methods &amp; sources:</strong>
     <strong>NW/W properties:</strong> CoolProp (Bell et al. 2014).
-    Brine density: Rowe &amp; Chou (1970). Brine viscosity: Mao &amp; Duan (2009).
-    <strong>Brine compressibility:</strong> κ<sub>T</sub>(m) = κ<sub>T,water</sub>·exp(−a·m),
-    a = 0.106 (NaCl) and 0.122 (KI) fitted to measured κ<sub>T</sub> of Apelblat (2017),
-    <em>J. Mol. Liq.</em> <strong>Brine speed of sound:</strong> from the exact identity
-    c = √(γ/ρκ<sub>T</sub>) with the salt-corrected density and compressibility —
-    but the <em>pure-water</em> γ, which biases c low by roughly 0.5% per mol/kg
-    (≈0.6% at 1 mol/kg, ≈1.8% at 3 mol/kg).
-    <strong>Solubility:</strong> Henry's law (NIST/Sander 2015) + Krichevsky–Kasarnovsky pressure correction + Sechenov salting-out (Schumpe 1993).
-    <strong>Diffusivity:</strong> Stokes–Einstein scaling from D(25 °C) reference values.
-    <strong>IFT:</strong> ${ix.ift_source}. Salinity: +0.04 mN/m per g/L NaCl (Hebach et al. 2002).
+    Brine density and viscosity (NaCl, KI): Laliberté (2009), applied as a salt-to-water ratio on CoolProp water.
+    These are <strong>CO₂-free</strong> values: dissolved CO₂ would raise the aqueous density by about 1–2% at most
+    (largest in cold, high-pressure fresh water), which is not included.
+    <strong>Wetting-phase thermodynamic properties</strong> (speed of sound, compressibility,
+    expansivity, thermal conductivity, Joule–Thomson coefficient, Z) are
+    <strong>pure-water values</strong> from CoolProp for freshwater and every brine alike; only
+    the wetting phase's density and viscosity carry a salt correction.
+    <strong>IFT:</strong> ${ix.ift_source} (correlation in temperature and the CO₂ mole fraction dissolved
+    in the aqueous phase; 273–473 K, ≤ 70 MPa, ≤ 5 mol/kg). Brine: a surface-tension increase
+    proportional to the charge-weighted cation molality. KI brine: an <strong>estimate</strong> — the
+    model has no iodide and no CO₂/KI IFT measurements exist, so KI is treated as a 1:1 potassium salt.
     <strong>Regime diagrams:</strong> Lenormand et al. (1988) J Fluid Mech; regime boundaries are approximate and depend on pore geometry.
   `;
 }
@@ -1041,7 +1084,7 @@ function drawForceBalance(fl) {
 // Normalised by X so different units and the two phases are comparable, and
 // because log derivatives ADD through products — which is what lets Ca and Bo
 // decompose into the properties driving them.
-function renderSensitivity(s, nwLabel, wLabel) {
+function renderSensitivity(s, nwLabel, wLabel, salted) {
   const el = $('sens-block');
   if (!s) { el.innerHTML = '<span style="color:var(--muted)">Not available.</span>'; return; }
 
@@ -1053,7 +1096,7 @@ function renderSensitivity(s, nwLabel, wLabel) {
     ? '<span style="color:var(--muted)">—</span>'
     : (v >= 10 ? `${Math.round(v)}×` : `${v.toFixed(1)}×`);
 
-  const propRows = s.rows.map(r => `
+  const rowHtml = r => `
     <tr>
       <td>${r.label}</td>
       <td style="text-align:right">${num(r.nw_T, 3)}</td>
@@ -1062,11 +1105,22 @@ function renderSensitivity(s, nwLabel, wLabel) {
       <td style="text-align:right;border-left:1px solid var(--border)">${num(r.nw_P, 3)}</td>
       <td style="text-align:right">${num(r.w_P, 3)}</td>
       <td style="text-align:right;color:var(--muted)">${mult(r.ratio_P)}</td>
-    </tr>`).join('');
+    </tr>`;
+  // Two groups: properties whose wetting-phase value is PURE WATER (speed of
+  // sound, compressibility) and those that carry a salt correction (density,
+  // viscosity). Grouped here, not in the backend, because the derived Ca rows
+  // index into the backend's row order.
+  const PURE_WATER_KEYS = ['speed_sound_m_s', 'compressibility_1_GPa'];
+  const thermoRows = s.rows.filter(r => PURE_WATER_KEYS.includes(r.key)).map(rowHtml).join('');
+  const fluidRows  = s.rows.filter(r => !PURE_WATER_KEYS.includes(r.key)).map(rowHtml).join('');
 
-  const clampNote = s.ift.clamped
-    ? ' <span class="uncorr" title="Above 20 MPa the measured IFT table ends and the value is clamped, so its pressure derivative would be exactly zero for a non-physical reason. Reported as unavailable rather than 0.">clamped</span>'
-    : '';
+  const clampNote = (s.ift.clamped
+    ? ` <span class="uncorr" title="${s.ift.reason === 'three_phase'
+        ? 'The IFT jumps across the CO₂–water three-phase line (below 31.5 °C), so a difference quotient straddling it is meaningless. Reported as unavailable rather than as a number.'
+        : s.ift.reason === 'branch_point'
+        ? 'The IFT correlation changes form here (where the dissolved CO₂ mole fraction reaches its three-phase value): the two forms agree in value but not in slope, so a difference quotient across it blends two different slopes. Reported as unavailable rather than as a number.'
+        : 'Outside the validity range of the IFT model, so a difference quotient there is an extrapolation artefact. Reported as unavailable rather than as a number.'}">unavailable</span>`
+    : '') + (s.ift.estimate ? IFT_ESTIMATE_BADGE : '');
   const iftRow = `
     <tr>
       <td>Interfacial tension${clampNote}</td>
@@ -1092,7 +1146,19 @@ function renderSensitivity(s, nwLabel, wLabel) {
       <td></td>
     </tr>`).join('');
 
-  el.innerHTML = `
+  // Near the critical point the CO2 derivatives genuinely diverge (kappa_T*P is the
+  // compressibility relative to an ideal gas; the backend flags it at >= 5).
+  const nc = s.near_critical;
+  const critFlag = (nc && nc.flag)
+    ? `<div class="rflag-detail" style="margin:0 0 10px;padding:8px 12px;border:1.5px solid #fca5a5;border-radius:8px;background:#fef2f2;font-size:12px">
+         <span class="rflag">⚑</span> <strong>Near the ${nwLabel} critical region</strong> — its isothermal compressibility is
+         ${nc.kappa_T_P.toFixed(1)}× the ideal-gas value (flag at ≥ ${nc.threshold}). The derivatives of the
+         ${nwLabel} properties diverge at the critical point, so these sensitivities are <em>large and depend on the
+         differencing step</em>; the Ca and Bo rows inherit this through the ${nwLabel} viscosity and density.
+         Read them as magnitudes, not precise values.</div>`
+    : '';
+
+  el.innerHTML = critFlag + `
     <div style="overflow-x:auto">
     <table class="ccs-tbl">
       <thead>
@@ -1111,10 +1177,13 @@ function renderSensitivity(s, nwLabel, wLabel) {
         </tr>
       </thead>
       <tbody>
-        ${propRows}
+        <tr class="section-head"><td colspan="7">Thermodynamic properties — wetting phase is pure water</td></tr>
+        ${thermoRows}
+        <tr class="section-head"><td colspan="7">Fluid properties${salted ? ' — wetting phase is salt-corrected' : ''}</td></tr>
+        ${fluidRows}
         <tr class="section-head"><td colspan="7">Interface</td></tr>
         ${iftRow}
-        <tr class="section-head"><td colspan="7">Derived — at fixed flow rate</td></tr>
+        <tr class="section-head"><td colspan="7">Transport characterization — derived at fixed flow rate</td></tr>
         ${derivedRows}
       </tbody>
     </table></div>
@@ -1126,13 +1195,16 @@ function renderSensitivity(s, nwLabel, wLabel) {
       the order of a realistic control tolerance. Because log derivatives add through products,
       the derived rows are exact decompositions, not separate estimates: they say <em>which</em>
       property drives each output. Central differences, ±${s.dT_K} °C and
-      ±${(s.dP_MPa*1000).toFixed(0)} kPa.
-      Density's two entries are the thermal expansivity and isothermal compressibility
-      reported above, so they double as a check on the method.
+      ±${+(s.dP_MPa*1000).toFixed(2)} kPa.
+      ${salted ? '' : 'Density\'s two entries are the thermal expansivity and isothermal compressibility reported above, so they double as a check on the method.'}
       Derived rows hold flow rate fixed. Near the critical point the derivative genuinely
       diverges, so values there are large and step-dependent — read them as magnitude,
       not as a precise figure.
-      ${s.ift.clamped ? '<br><span style="color:#b45309"><strong>IFT is clamped at this pressure</strong> (above the 20 MPa table limit), so its pressure derivative and everything built on it are unavailable rather than zero.</span>' : ''}
+      ${s.ift.clamped ? `<br><span style="color:#b45309"><strong>${s.ift.reason === 'three_phase'
+          ? 'The IFT jumps across the CO₂–water three-phase line within this stencil'
+          : s.ift.reason === 'branch_point'
+          ? 'The IFT correlation changes slope within this stencil (the x₁ = x₃ branch point)'
+          : 'IFT is outside its model\'s validity range here'}</strong>, so its temperature and pressure derivatives and everything built on them are unavailable rather than a misleading number.</span>` : ''}
     </div>`;
 }
 
@@ -1174,7 +1246,7 @@ let ccsData = null;
 
 async function loadCCS() {
   try {
-    const res = await fetch('/api/ccs-sites');
+    const res = await fetch(API + '/api/ccs-sites');
     if (!res.ok) throw new Error('HTTP ' + res.status);
     ccsData = await res.json();
     drawCCS();
@@ -1190,9 +1262,8 @@ async function loadCCS() {
 // the axes reads the coordinates off. Either way state.T/state.P are updated
 // and schedule() re-runs everything downstream: property cards, Lenormand,
 // force balance, and both "current conditions" markers.
-const APP_T_MIN = 10, APP_T_MAX = 200;    // IFT table lower bound is 10 °C
+const APP_T_MIN = 10, APP_T_MAX = 200;
 const APP_P_MIN = 0.1, APP_P_MAX = 40;    // raised from 20 so deep sites work
-const IFT_P_MAX = 20;                     // IFT table upper bound
 
 function applyConditions(T_C, P_MPa, label) {
   const T = Math.min(APP_T_MAX, Math.max(APP_T_MIN, T_C));
@@ -1210,9 +1281,6 @@ function applyConditions(T_C, P_MPa, label) {
     : `Set to <strong>${state.T} °C, ${state.P} MPa</strong>.`);
   if (clamped) bits.push(`<span style="color:#b45309">Clamped into the
     calculator's range (${APP_T_MIN}–${APP_T_MAX} °C, ${APP_P_MIN}–${APP_P_MAX} MPa).</span>`);
-  if (state.P > IFT_P_MAX) bits.push(`<span style="color:#b45309">Above
-    ${IFT_P_MAX} MPa the IFT table ends, so IFT is held at its
-    ${IFT_P_MAX} MPa value — Ca and Bo here are indicative, not measured.</span>`);
   $('ccs-click-note').innerHTML = bits.join(' ');
 
   schedule();
@@ -1230,7 +1298,7 @@ function attachCCSClick() {
     if (!p) return;
     handledAt = Date.now();
     const isSite = String(p.data.name || '').startsWith('Site');
-    applyConditions(p.x, p.y, isSite ? (p.text || '').trim() : null);
+    applyConditions(p.x, p.y, isSite ? p.customdata[7] : null);
   });
 
   // A click on empty space inside the axes: convert pixels to data coords.
@@ -1289,31 +1357,84 @@ function drawCCS() {
     hovertemplate: 'CO₂ critical point<br>%{x:.2f} °C, %{y:.3f} MPa<extra></extra>',
   });
 
-  // Field sites, split by storage regime
-  const sc  = d.sites.filter(s => s.supercritical);
-  const nsc = d.sites.filter(s => !s.supercritical);
+  // Field sites (Imre et al. 2015): each region is a P-T BOX over the reported
+  // ranges -- a line where one quantity is a single value, a point where both
+  // are. One colour per site, sampled from BRAND_CMAP (the property surface
+  // ramp) so the panel matches the surface; the regime is in the hover text and
+  // the table.
+  const cmapAt = t => {
+    for (let i = 1; i < BRAND_CMAP.length; i++) {
+      if (t <= BRAND_CMAP[i][0]) {
+        const [t0, c0] = BRAND_CMAP[i - 1], [t1, c1] = BRAND_CMAP[i];
+        const f = (t - t0) / (t1 - t0);
+        const a = c0.match(/\d+/g).map(Number), b = c1.match(/\d+/g).map(Number);
+        return '#' + a.map((v, k) => Math.round(v + f * (b[k] - v))
+                        .toString(16).padStart(2, '0')).join('');
+      }
+    }
+    return BRAND_CMAP[BRAND_CMAP.length - 1][1];
+  };
+  const SITE_COLORS = { sleipner: cmapAt(0.3333), snohvit: cmapAt(0.5),
+                        nagaoka: cmapAt(0.6667), ketzin: cmapAt(0.8333) };
+  const rgba = (hex, a) => {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
+  };
+  const rng = (a, b, dp) => a === b ? a.toFixed(dp) : `${a.toFixed(dp)}–${b.toFixed(dp)}`;
+  const fmtRho = (a, b) => a == null ? '—' : (Math.round(a) === Math.round(b)
+    ? `${a.toFixed(0)}` : `${a.toFixed(0)}–${b.toFixed(0)}`);
+  const sitePts = {};
+  const siteAnn = [];
+  d.sites.forEach(site => {
+    const col = SITE_COLORS[site.key] || '#6b7280';
+    sitePts[site.key] = sitePts[site.key] || [];
+    site.regions.forEach(r => {
+      const multi = site.regions.length > 1;
+      const label = multi ? `${site.name} — ${r.label}` : site.name;
+      if (!r.is_point) {
+        traces.push({
+          type: 'scatter', mode: 'lines',
+          x: [r.T_min, r.T_max, r.T_max, r.T_min, r.T_min],
+          y: [r.P_min, r.P_min, r.P_max, r.P_max, r.P_min],
+          fill: 'toself', fillcolor: rgba(col, 0.22),
+          line: { color: col, width: 2 },
+          showlegend: false, hoverinfo: 'skip',
+        });
+      }
+      // Name label on a short leader line; the offsets are set per region in
+      // the data because the sites overlap and automatic placement collides.
+      siteAnn.push({
+        x: r.label_at[0], y: r.label_at[1], ax: r.label_px[0], ay: r.label_px[1],
+        xref: 'x', yref: 'y', axref: 'pixel', ayref: 'pixel',
+        text: label, showarrow: true, arrowhead: 0, arrowwidth: 1,
+        arrowcolor: col, font: { size: 10, color: '#1a1a2e' },
+        bgcolor: 'rgba(255,255,255,0.8)', borderpad: 1,
+      });
+      // Clickable mid-range marker carrying the hover details
+      sitePts[site.key].push({
+        x: r.T_mid, y: r.P_mid,
+        cd: [site.name, r.label, rng(r.T_min, r.T_max, 1), rng(r.P_min, r.P_max, 1),
+             fmtRho(r.rho_min, r.rho_max), r.regimes.join(' / '), site.original,
+             r.is_point ? label : `${label} (mid-range)`],
+      });
+    });
+  });
   const mk = (arr, color, symbol, name) => arr.length && traces.push({
-    type: 'scatter', mode: 'markers+text',
-    x: arr.map(s => s.T_C), y: arr.map(s => s.P_MPa),
-    text: arr.map(s => s.name.replace(/ \(.*\)/, '')),
-    // Above the marker rather than beside it: sites cluster in pressure
-    // (Decatur 22.0 and Quest 20.45 MPa) so side labels collide.
-    textposition: 'top center', textfont: { size: 10, color: '#1a1a2e' },
-    marker: { size: 12, color: color, symbol: symbol,
+    type: 'scatter', mode: 'markers',
+    x: arr.map(a => a.x), y: arr.map(a => a.y),
+    marker: { size: 9, color: color, symbol: symbol,
               line: { color: '#fff', width: 1.5 } },
     name: name,
-    customdata: arr.map(s => [s.formation, s.depth_m, s.co2_density_kg_m3,
-                              s.regime, s.country, s.start]),
+    customdata: arr.map(a => a.cd),
     hovertemplate:
-      '<b>%{text}</b> — %{customdata[4]}<br>' +
-      '%{customdata[0]}<br>' +
-      'Depth %{customdata[1]} m · from %{customdata[5]}<br>' +
-      '<b>%{x:.1f} °C, %{y:.1f} MPa</b><br>' +
-      'CO₂ density %{customdata[2]:.0f} kg/m³<br>' +
-      '%{customdata[3]}<extra></extra>',
+      '<b>%{customdata[0]}</b> — %{customdata[1]}<br>' +
+      '<b>%{customdata[2]} °C, %{customdata[3]} MPa</b><br>' +
+      'CO₂ density %{customdata[4]} kg/m³<br>' +
+      '%{customdata[5]}<br>' +
+      '<i>Click to set the sidebar to this mid-range point</i><extra></extra>',
   });
-  mk(sc,  ACCENT, 'circle',  'Site — supercritical CO₂');
-  mk(nsc, '#f59e0b', 'diamond', 'Site — NOT supercritical');
+  d.sites.forEach(site => mk(sitePts[site.key] || [], SITE_COLORS[site.key] || '#6b7280',
+                             'circle', site.name));
 
   // Current sidebar conditions, for comparison with the field sites
   traces.push({
@@ -1349,6 +1470,7 @@ function drawCCS() {
         line: { color: '#dc2626', width: 1, dash: 'dash' } },
     ],
     annotations: [
+      ...siteAnn,
       { x: d.critical.T_C + 6, y: d.P_range[1] - 1.5, xanchor: 'left',
         text: '<b>supercritical</b>', showarrow: false,
         font: { size: 11, color: ACCENT } },
@@ -1365,49 +1487,49 @@ function drawCCS() {
   }, { responsive: true, displaylogo: false });
   attachCCSClick();
 
-  const nNotSc = nsc.length;
   $('ccs-note').innerHTML = `
-    In-situ reservoir conditions at the injection interval for ${d.sites.length}
-    field CCS sites, on the pure-CO₂ phase diagram (CoolProp, Span &amp; Wagner 1996).
-    Dotted grey lines are exact CO₂ iso-density contours — they show why the same
-    stored mass needs very different pore volume from site to site.
-    ${nNotSc ? `<strong>${nNotSc} site${nNotSc>1?'s are':' is'} not in the supercritical
-    region</strong> (amber diamond): above T<sub>c</sub> but below P<sub>c</sub>, where CO₂ is
-    gas-like and far less dense. ` : ''}
-    The purple × is the condition set in the sidebar.
-    Conditions are reservoir values, not wellhead or injected-stream values, which differ.
+    P–T conditions for ${d.sites.length} field CCS sites as compiled by Imre et al. (2015),
+    on the pure-CO₂ phase diagram (CoolProp, Span &amp; Wagner 1996). Each site has its own colour and
+    is drawn as a <strong>box over the reported ranges</strong> (a line or point where only one
+    value is given); hover a dot for the density and regime. Dotted grey lines are exact CO₂
+    iso-density contours. The purple × is the condition set in the sidebar. Nagaoka is the
+    well-head and well-bottom conditions, not a reservoir range.
   `;
 }
 
 function buildCCSTable() {
   const d = ccsData; if (!d) return;
-  const rows = d.sites.map(s => `
+  const rng = (a, b, dp) => a === b ? a.toFixed(dp) : `${a.toFixed(dp)}–${b.toFixed(dp)}`;
+  const fmtRho = (a, b) => a == null ? '—' : (Math.round(a) === Math.round(b)
+    ? `${a.toFixed(0)}` : `${a.toFixed(0)}–${b.toFixed(0)}`);
+  const rows = d.sites.map(s => s.regions.map((r, k) => {
+    const n = s.regions.length;
+    const span = (html) => k === 0 ? html.replace('<td', `<td rowspan="${n}"`) : '';
+    return `
     <tr>
-      <td style="font-weight:600">${s.name}</td>
-      <td>${s.country}</td>
-      <td>${s.formation}</td>
-      <td style="text-align:right">${s.depth_m}</td>
-      <td style="text-align:right">${s.T_C.toFixed(1)}</td>
-      <td style="text-align:right">${s.P_MPa.toFixed(2)}</td>
-      <td style="text-align:right">${s.co2_density_kg_m3 != null ? s.co2_density_kg_m3.toFixed(0) : '—'}</td>
-      <td>${s.regime}</td>
-      <td style="font-size:10px">${s.reference}
-        ${s.provenance === 'secondary'
-          ? '<span class="uncorr" title="Reference identified from the literature but not read directly in this session — verify before publishing">check</span>'
-          : ''}
-        <div style="color:var(--muted);margin-top:2px">${s.note}</div></td>
-    </tr>`).join('');
+      ${span(`<td style="font-weight:600">${s.name}</td>`)}
+      ${span(`<td>${s.location}</td>`)}
+      ${span(`<td>${s.formation}</td>`)}
+      <td>${n > 1 ? r.label : ''}</td>
+      <td style="text-align:right">${rng(r.T_min, r.T_max, 1)}</td>
+      <td style="text-align:right">${rng(r.P_min, r.P_max, 1)}</td>
+      <td style="text-align:right">${fmtRho(r.rho_min, r.rho_max)}</td>
+      <td>${r.regimes.join(' / ')}</td>
+      ${span(`<td style="font-size:10px">${s.reference}
+        <div style="margin-top:2px">Original: ${s.original}</div>
+        <div style="color:var(--muted);margin-top:2px">${s.note}</div></td>`)}
+    </tr>`;
+  }).join('')).join('');
 
   const pending = d.pending.map(p =>
-    `<li><strong>${p.name}</strong> (${p.country}) — have: ${p.have}; <em>missing: ${p.missing}</em></li>`
+    `<li><strong>${p.name}</strong> (${p.country}) — ${p.have}; <em>missing: ${p.missing}</em></li>`
   ).join('');
 
   $('ccs-table').innerHTML = `
     <div style="overflow-x:auto">
     <table class="ccs-tbl">
       <thead><tr>
-        <th>Site</th><th>Country</th><th>Formation</th>
-        <th style="text-align:right">Depth<br>[m]</th>
+        <th>Site</th><th>Location</th><th>Formation</th><th>Condition</th>
         <th style="text-align:right">T<br>[°C]</th>
         <th style="text-align:right">P<br>[MPa]</th>
         <th style="text-align:right">ρ<sub>CO₂</sub><br>[kg/m³]</th>
@@ -1416,8 +1538,8 @@ function buildCCSTable() {
       <tbody>${rows}</tbody>
     </table></div>
     ${pending ? `<div style="margin-top:10px;font-size:10.5px;color:var(--muted);line-height:1.6">
-      <strong style="color:var(--text)">Located but not plotted</strong> — a reservoir
-      temperature or pressure could not be sourced, and neither is estimated here:
+      <strong style="color:var(--text)">Reported by Imre et al. but not yet plotted</strong> —
+      nothing is estimated here:
       <ul style="margin:4px 0 0 18px;padding:0">${pending}</ul></div>` : ''}
   `;
 }
@@ -1454,7 +1576,7 @@ const ACCENT = '#c2410c';
 // Grid spans the app's own operating window, so the surface always covers the
 // conditions the calculator above is reporting. CO2 is the only fluid whose
 // critical point falls inside that window (31 °C, 7.38 MPa); water's is at
-// 374 °C / 22.06 MPa and H2/N2 are cryogenic, so those surfaces are smooth.
+// 374 °C / 22.06 MPa, so that surface is smooth across the window.
 const SURF_T_MIN = 10,  SURF_T_MAX = 200;    // °C   — matches T_C bounds
 const SURF_P_MIN = 0.1, SURF_P_MAX = 20;     // MPa  — matches P_MPa bounds
 
@@ -1471,7 +1593,7 @@ function surfFluidCls(k) { return 'sf-' + k.toLowerCase(); }
 async function initSurfaceFluids() {
   let fluids;
   try {
-    fluids = await (await fetch('/api/surface-fluids')).json();
+    fluids = await (await fetch(API + '/api/surface-fluids')).json();
   } catch (e) { return; }
   $('surf-fluids').innerHTML = Object.entries(fluids).map(([k, v]) =>
     `<button class="${surfFluidCls(k)}${k === surf.fluid ? ' active' : ''}" data-sf="${k}">${v.label}</button>`
@@ -1507,7 +1629,7 @@ async function loadSurface() {
   const tag = JSON.stringify(body);
   surf.inflight = tag;
   try {
-    const res = await fetch('/api/surface', { method: 'POST',
+    const res = await fetch(API + '/api/surface', { method: 'POST',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const d = await res.json();

@@ -1,11 +1,22 @@
 import os
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Optional
 import calculator
 
 app = FastAPI(title="Multiphase Flow Fluid Properties")
+
+# The static front end is also published on GitHub Pages (docs/), which calls
+# this API from another origin. Allow that origin, plus local dev servers.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://anna-herring.github.io",
+                   "http://localhost:8001", "http://127.0.0.1:8001"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
 
 @app.middleware("http")
 async def ngrok_skip(request, call_next):
@@ -16,17 +27,21 @@ async def ngrok_skip(request, call_next):
 class CalcRequest(BaseModel):
     T_C:           float = Field(50.0, ge=10.0, le=200.0)
     # Upper limit raised 20 -> 40 MPa so every CCS site on the phase diagram
-    # is reachable by clicking it (Snohvit sits at 33 MPa). The IFT table only
-    # covers 0.1-20 MPa, so above that the IFT is clamped and the response
-    # carries interaction.ift_out_of_range = true.
+    # is reachable by clicking it (Snohvit sits at 33 MPa). The IFT model
+    # (Mutailipu 2024) is valid to 70 MPa and 473 K, so this whole window is
+    # inside it; the response still carries interaction.ift_out_of_range.
     P_MPa:         float = Field(10.0, ge=0.0,  le=40.0)
     nw_fluid:      str   = "CO2"
     w_fluid:       str   = "water"
-    salinity_g_L:  Optional[float] = Field(None, ge=0.0, le=350.0)
+    # Salt caps = 2 mol/L (NaCl 116.88 g/L; 116.9 leaves room for float noise).
+    # Chosen so the brine density/viscosity (Laliberte 2009) and IFT
+    # (Mutailipu 2024, up to 5 mol/kg) correlations are used without
+    # extrapolation in concentration.
+    salinity_g_L:  Optional[float] = Field(None, ge=0.0, le=116.9)
     Q_ml_hr:       Optional[float] = Field(None, ge=0.0)
     Ca_nw_target:  Optional[float] = Field(None, ge=0.0)
     Ca_w_target:   Optional[float] = Field(None, ge=0.0)
-    ki_mol_L:      Optional[float] = Field(None, ge=0.0, le=1.5)
+    ki_mol_L:      Optional[float] = Field(None, ge=0.0, le=2.0)
     core_diam_mm:  float = Field(10.0, ge=0.1, le=100.0)
     porosity:      float = Field(0.22, ge=0.01, le=0.99)
     char_len_um:   float = Field(40.0, ge=0.1, le=10000.0)

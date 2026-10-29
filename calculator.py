@@ -10,6 +10,8 @@ surfaces over a (T, P) grid (see surface_grid).
   - CO2 solubility (water + NaCl brine)   : Duan & Sun (2006) Marine Chemistry,
         with fugacity from the Duan, Moller & Weare (1992) BWR EOS
   - CO2 solubility (KI), H2/N2            : Henry's law + Krichevsky-Kasarnovsky
+        (solubility is NO LONGER REPORTED as of 2026-10-08 -- the validated
+        path is retained unused; see the note in calculate())
   - Diffusivity                           : Stokes-Einstein scaling from D_25 ref
   - Interfacial tension                   : 2-D interpolation of published data
 
@@ -21,7 +23,12 @@ coefficient from residual properties instead -- see _fugacity_MPa below.
 
 import numpy as np
 import CoolProp.CoolProp as CP
-from scipy.interpolate import RegularGridInterpolator
+from scipy.interpolate import PchipInterpolator, RegularGridInterpolator
+
+try:                                  # package import (uvicorn main:app) ...
+    from . import mutailipu as _mut
+except ImportError:                   # ... or run from this directory
+    import mutailipu as _mut
 
 # ── Constants ────────────────────────────────────────────────────────────────
 R        = 8.314           # J/(mol·K)
@@ -36,6 +43,9 @@ NW_FLUIDS = {
     "CO2": {
         "coolprop": "CO2",      "Mw": 0.04401, "Vmp": 35.1e-6,
         "D25": 2.2e-9,   "NIST_Hcp": 0.035,    "H_dT": 2400,
+        # Modified Stokes-Einstein constants for CO2 in pure water, Cadogan,
+        # Maitland & Trusler (2014), eq 8: a = a298 [1 + alpha (T/K - 298)]
+        "SE_a298_pm": 168.0, "SE_alpha": 2.0e-3,
         "label": "CO₂",  "color": "#e74c3c",
         "Tc": 304.13,    "Pc": 7.377e6,
     },
@@ -60,23 +70,8 @@ _PHASE = {0: "Liquid", 1: "Supercritical Fluid", 2: "Supercritical Fluid",
 _IFT_P = np.array([0.1, 1.0, 2.5, 5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0])
 _IFT_T = np.array([10., 20., 30., 40., 50., 60., 75., 100., 150., 200.])
 
-# CO2-water IFT [mN/m]
-# Hebach et al. (2002) J Phys Chem; Georgiadis et al. (2010) J Supercrit Fluids;
-# Chiquet et al. (2007) Int J Greenh Gas Control; Bikkina et al. (2011);
-# Pereira et al. (2016) J Chem Thermodyn
-# 10 °C row: linear extrapolation from 20–30 °C gradient; pure-water anchor 74.2 mN/m
-_IFT_CO2 = np.array([
-    [74.4, 69.9, 64.0, 53.1, 43.2, 37.2, 33.7, 30.9, 29.1, 28.0],
-    [72.8, 68.2, 62.5, 51.8, 42.1, 36.2, 32.8, 30.2, 28.6, 27.6],
-    [71.2, 66.5, 61.0, 50.5, 41.0, 35.2, 31.9, 29.5, 28.1, 27.2],
-    [69.0, 64.2, 58.5, 48.0, 38.5, 32.5, 29.5, 27.3, 26.1, 25.5],
-    [66.8, 62.0, 56.2, 45.8, 36.8, 30.8, 28.0, 26.1, 25.0, 24.5],
-    [64.4, 59.5, 53.8, 43.5, 35.0, 29.2, 26.6, 25.0, 24.0, 23.6],
-    [61.0, 56.0, 50.5, 40.5, 33.0, 27.8, 25.5, 24.1, 23.3, 22.9],
-    [57.0, 52.0, 47.0, 37.5, 30.5, 26.0, 23.9, 22.6, 21.9, 21.5],
-    [48.5, 44.5, 40.5, 32.5, 27.0, 23.5, 21.8, 20.8, 20.2, 20.0],
-    [37.5, 35.0, 32.0, 26.5, 22.5, 20.0, 18.8, 18.2, 17.8, 17.6],
-])
+# CO2-water IFT: see _PEREIRA_TABLE6 / _PereiraIFT below (measured data, Pereira 2016).
+# The axes above and the H2 / N2 grids below are DORMANT (CO2-only tool).
 
 # H2-water IFT [mN/m]
 # Chow et al. (2018) J Chem Eng Data; Hashemi et al. (2021) Int J Hydrogen Energy;
@@ -112,14 +107,546 @@ _IFT_N2 = np.array([
     [37.5, 37.3, 37.0, 36.5, 36.0, 35.5, 35.1, 34.7, 34.3, 34.0],
 ])
 
-_IFT_INTERP = {
-    "CO2": RegularGridInterpolator((_IFT_T, _IFT_P), _IFT_CO2, method="linear",
-                                    bounds_error=False, fill_value=None),
-}
+_IFT_INTERP = {}   # dormant: H2 / N2 grids would be registered here if restored
 
 IFT_SOURCES = {
-    "CO2": "Hebach et al. (2002); Georgiadis et al. (2010); Chiquet et al. (2007)",
+    "CO2": "Mutailipu et al. (2024)",
 }
+
+# ── CO2/H2O interfacial tension: Pereira et al. (2016), Table 6 ──────────────
+# Pereira, L.M.C.; Chapoy, A.; Burgass, R.; Oliveira, M.B.; Coutinho, J.A.P.;
+# Tohidi, B. "Study of the impact of high temperatures and pressures on the
+# equilibrium densities and interfacial tension of the carbon dioxide/water
+# system", J. Chem. Thermodyn. 2016, 93, 404-415. Axisymmetric drop shape
+# analysis, 298-469 K, up to 69 MPa, pure water.
+#
+# (T [K], P [MPa], IFT [mN/m], Uc [mN/m]); Uc is the combined expanded
+# uncertainty (>95 % confidence; mean 0.31, maximum 1.87 at the three-phase
+# point). This REPLACES an earlier hand-built 10x10 grid whose per-cell
+# provenance was not recorded.
+_PEREIRA_TABLE6 = (
+    (298.5, 0.70, 66.95, 0.21),
+    (298.5, 1.69, 60.56, 0.17),
+    (298.5, 3.68, 48.70, 0.14),
+    (298.5, 5.64, 37.74, 0.19),
+    (298.5, 6.06, 35.06, 0.22),
+    (298.5, 6.40, 32.97, 0.52),
+    (298.6, 6.49, 31.69, 1.15),
+    (298.6, 6.49, 30.79, 1.87),
+    (298.4, 6.83, 31.00, 0.49),
+    (298.5, 7.20, 30.99, 0.40),
+    (298.5, 8.10, 31.09, 0.33),
+    (298.6, 8.97, 30.98, 0.34),
+    (298.6, 10.63, 30.73, 0.34),
+    (298.6, 13.18, 30.62, 0.37),
+    (298.6, 15.15, 30.81, 0.42),
+    (298.6, 20.83, 29.84, 0.49),
+    (313.3, 0.46, 68.52, 0.33),
+    (313.3, 1.85, 59.60, 0.31),
+    (313.3, 3.57, 50.67, 0.41),
+    (313.3, 5.34, 42.75, 0.22),
+    (313.3, 7.01, 36.65, 0.36),
+    (313.2, 9.30, 30.62, 0.82),
+    (313.2, 10.44, 29.91, 0.58),
+    (313.3, 13.92, 29.59, 0.40),
+    (313.3, 20.82, 29.20, 0.32),
+    (313.3, 25.68, 28.96, 0.41),
+    (313.3, 29.11, 29.05, 0.46),
+    (313.2, 31.19, 28.88, 0.51),
+    (333.0, 0.92, 62.31, 0.15),
+    (333.0, 1.79, 58.98, 0.17),
+    (333.0, 3.66, 52.28, 0.16),
+    (333.0, 5.00, 47.96, 0.13),
+    (333.0, 5.85, 45.30, 0.15),
+    (333.0, 7.18, 41.29, 0.20),
+    (333.0, 8.89, 36.76, 0.21),
+    (333.1, 10.04, 34.08, 0.26),
+    (333.2, 11.42, 30.10, 0.46),
+    (333.1, 15.01, 29.46, 0.35),
+    (333.2, 21.12, 28.13, 0.30),
+    (333.2, 24.27, 27.39, 0.33),
+    (333.2, 29.58, 27.00, 0.35),
+    (333.2, 31.29, 27.25, 0.41),
+    (333.2, 39.64, 26.26, 0.41),
+    (333.2, 50.31, 26.27, 0.54),
+    (333.2, 59.91, 26.16, 0.75),
+    (373.8, 0.34, 56.79, 0.23),
+    (373.9, 1.30, 55.02, 0.18),
+    (373.9, 3.86, 49.03, 0.17),
+    (374.0, 5.60, 45.62, 0.18),
+    (374.0, 7.57, 41.88, 0.15),
+    (374.0, 12.09, 34.14, 0.19),
+    (374.0, 16.96, 29.00, 0.20),
+    (374.0, 25.15, 26.41, 0.18),
+    (373.9, 40.03, 24.35, 0.27),
+    (374.0, 50.18, 23.64, 0.27),
+    (374.1, 62.07, 23.38, 0.36),
+    (374.0, 69.12, 23.42, 0.35),
+    (424.4, 1.55, 46.34, 0.14),
+    (424.4, 5.81, 40.10, 0.16),
+    (424.4, 10.21, 34.60, 0.12),
+    (424.4, 16.43, 29.00, 0.13),
+    (424.5, 23.83, 25.55, 0.15),
+    (424.6, 30.05, 22.82, 0.11),
+    (424.6, 39.68, 20.89, 0.11),
+    (424.5, 50.11, 19.82, 0.25),
+    (424.6, 60.19, 18.83, 0.24),
+    (424.6, 69.14, 18.42, 0.26),
+    (469.0, 5.90, 32.91, 0.15),
+    (469.2, 10.08, 28.69, 0.15),
+    (469.1, 10.79, 28.49, 0.11),
+    (469.2, 14.91, 24.88, 0.11),
+    (469.2, 17.70, 23.14, 0.10),
+    (469.2, 20.71, 21.82, 0.11),
+    (469.2, 29.97, 18.22, 0.18),
+    (469.2, 40.06, 15.45, 0.14),
+    (469.2, 50.16, 13.84, 0.13),
+    (469.4, 59.96, 12.73, 0.12),
+    (469.2, 69.09, 12.65, 0.18)
+)
+
+
+def _water_surface_tension_mN_m(T_K):
+    """Surface tension of water, IAPWS R1-76(2014): B*tau^mu*(1 + b*tau)."""
+    tau = 1.0 - T_K / 647.096
+    return 235.8 * tau ** 1.256 * (1.0 - 0.625 * tau)
+
+
+class _PereiraIFT:
+    """
+    CO2-water IFT interpolated from Pereira et al. (2016) Table 6.
+
+    Six isotherms (25.4, 40.1, 60.0, 100.8, 151.4, 196.0 °C). Along each
+    isotherm IFT(P) is a shape-preserving (PCHIP) interpolant of the measured
+    points, extended down to the water vapour pressure with the pure-water
+    surface tension there (no CO2 present => no CO2 effect), because the data
+    stop at 0.34-5.9 MPa. At a given P the isotherms that REACH that pressure
+    are interpolated across temperature, again with PCHIP.
+
+    This is interpolation only. Outside the data -- below 25.4 °C or above
+    196 °C, or at a pressure beyond the isotherms that reach it (25.4 °C stops
+    at 20.8 MPa, 40.1 °C at 31.2 MPa) -- the temperature is clamped to the
+    nearest covered value and the second return value is False. Nothing is
+    extrapolated.
+
+    Two rows share P = 6.49 MPa at 298.6 K (footnote a: the vapour + liquid +
+    liquid point, IFT 31.69 gas/water and 30.79 liquid CO2/water); their mean
+    is used there, i.e. up to ~0.45 mN/m from either side of that one pressure.
+    """
+    GROUP_K = 1.5      # rows within this many K are one isotherm
+
+    def __init__(self, table):
+        rows = sorted(table)
+        groups = []
+        for r in rows:
+            if groups and abs(r[0] - groups[-1][-1][0]) <= self.GROUP_K:
+                groups[-1].append(r)
+            else:
+                groups.append([r])
+        self.T_C, self.P_lo, self.P_hi, self._fn = [], [], [], []
+        self.P_meas_lo = []     # lowest measured P per isotherm (P_lo is the extended one)
+        for g in groups:
+            T_K = float(np.mean([r[0] for r in g]))
+            byP = {}
+            for _, P, s, _u in g:
+                byP.setdefault(round(P, 6), []).append(s)
+            P = np.array(sorted(byP))
+            s = np.array([np.mean(byP[p]) for p in P])
+            P_sat = CP.PropsSI("P", "T", T_K, "Q", 0, "Water") / 1e6
+            self.P_meas_lo.append(float(P[0]))       # lowest MEASURED pressure
+            if P_sat < P[0]:
+                P = np.r_[P_sat, P]
+                s = np.r_[_water_surface_tension_mN_m(T_K), s]
+            self.T_C.append(T_K - 273.15)
+            self.P_lo.append(float(P[0]))
+            self.P_hi.append(float(P[-1]))
+            self._fn.append(PchipInterpolator(P, s))
+        self.T_C = np.array(self.T_C)
+        self.P_lo = np.array(self.P_lo)
+        self.P_hi = np.array(self.P_hi)
+
+    def at_isotherm(self, i, P_MPa):
+        return float(self._fn[i](min(max(P_MPa, self.P_lo[i]), self.P_hi[i])))
+
+    def __call__(self, T_C, P_MPa):
+        """-> (IFT [mN/m], True if (T, P) lies inside the measured data)."""
+        idx = [i for i in range(len(self.T_C)) if self.P_hi[i] >= P_MPa]
+        in_range = True
+        if not idx:                    # beyond every isotherm: clamp P (each
+            idx = list(range(len(self.T_C)))   # isotherm is read at its own top
+            in_range = False                   # pressure), keep T interpolation
+        Ts = self.T_C[idx]
+        T_use = min(max(T_C, Ts.min()), Ts.max())
+        if abs(T_use - T_C) > 0.5:      # 0.5 K tolerance at the edges of the data
+            in_range = False
+        vals = np.array([self.at_isotherm(i, P_MPa) for i in idx])
+        if len(idx) == 1:
+            return float(vals[0]), in_range
+        return float(PchipInterpolator(Ts, vals)(T_use)), in_range
+
+    def explain(self, T_C, P_MPa):
+        """Why __call__ is NOT a plain interpolation of measurements at (T, P):
+        a list of dict(outside=..., estimated_by=...). Mirrors __call__'s own
+        logic, so it describes exactly what the number is made of."""
+        notes = []
+        n = len(self.T_C)
+        idx = [i for i in range(n) if self.P_hi[i] >= P_MPa]
+        if not idx:
+            notes.append(dict(
+                outside=f"P = {P_MPa:.1f} MPa is above the highest measured "
+                        f"pressure ({self.P_hi.max():.0f} MPa)",
+                estimated_by="each isotherm is read at its own highest measured "
+                             "pressure, then interpolated in temperature"))
+            idx = list(range(n))
+        Ts = self.T_C[idx]
+        T_use = min(max(T_C, Ts.min()), Ts.max())
+        if abs(T_use - T_C) > 0.5:
+            notes.append(dict(
+                outside=f"T = {T_C:.0f} °C, P = {P_MPa:.1f} MPa has no measurements "
+                        f"(at this pressure the data span {Ts.min():.1f}–{Ts.max():.1f} °C)",
+                estimated_by=f"temperature held at {T_use:.1f} °C: the IFT at the "
+                             f"nearest measured temperature for this pressure"))
+        plo = float(np.interp(T_use, Ts, np.array(self.P_meas_lo)[idx]))
+        if P_MPa < plo - 1e-6:
+            T_K = T_use + 273.15
+            P_sat = CP.PropsSI("P", "T", T_K, "Q", 0, "Water") / 1e6
+            notes.append(dict(
+                outside=f"P = {P_MPa:.2f} MPa is below the lowest measured pressure "
+                        f"at {T_use:.0f} °C (about {plo:.1f} MPa)",
+                estimated_by=f"interpolated between the lowest measured point and the "
+                             f"surface tension of pure water at its vapour pressure "
+                             f"({P_sat:.3f} MPa, {_water_surface_tension_mN_m(T_K):.1f} mN/m)"))
+        return notes
+
+
+_PEREIRA = None
+
+
+def _pereira_ift():
+    """Built on first use (it needs CoolProp, and import order is top-down)."""
+    global _PEREIRA
+    if _PEREIRA is None:
+        _PEREIRA = _PereiraIFT(_PEREIRA_TABLE6)
+    return _PEREIRA
+
+
+# ── NaCl effect on CO2/H2O IFT: Pereira et al. (2017), Tables 4 and 5 ────────
+# Pereira, L.M.C.; Chapoy, A.; Burgass, R.; Tohidi, B. "Interfacial tension of
+# CO2 + brine systems: Experiments and predictive modelling", Adv. Water
+# Resour. 2017, 103, 64-75. Pendant-drop (ADSA) IFT of CO2 + NaCl(aq) at 0.98
+# and 1.98 mol/kg, 298.6-423 K, 3-69.5 MPa. NaCl only: the paper has no KCl or
+# KI measurements (KCl appears only in a literature NaCl+KCl mixture).
+#
+# (m [mol/kg], T [K], P [MPa], IFT [mN/m], Uc [mN/m]); Uc as in Table 6 above.
+_PEREIRA2017_NACL = (
+    (0.98, 298.6, 3.00, 53.39, 0.16),
+    (0.98, 298.6, 4.96, 42.37, 0.17),
+    (0.98, 298.6, 5.66, 38.43, 0.17),
+    (0.98, 298.6, 10.31, 32.98, 0.39),
+    (0.98, 298.6, 15.58, 32.35, 0.42),
+    (0.98, 298.6, 20.21, 32.33, 0.54),
+    (0.98, 333.2, 3.91, 52.10, 0.16),
+    (0.98, 333.2, 7.40, 41.70, 0.16),
+    (0.98, 333.2, 18.84, 31.70, 0.27),
+    (0.98, 333.2, 40.94, 29.40, 0.54),
+    (0.98, 333.2, 55.07, 29.20, 0.68),
+    (0.98, 373.4, 7.19, 44.04, 0.17),
+    (0.98, 373.4, 12.32, 35.94, 0.22),
+    (0.98, 373.4, 20.14, 30.60, 0.18),
+    (0.98, 373.4, 40.89, 26.81, 0.26),
+    (0.98, 373.4, 69.50, 25.10, 0.44),
+    (0.98, 423.3, 5.69, 42.30, 0.14),
+    (0.98, 423.3, 11.12, 35.60, 0.14),
+    (0.98, 423.3, 22.37, 27.30, 0.16),
+    (0.98, 423.3, 43.07, 22.20, 0.19),
+    (0.98, 423.3, 69.07, 19.90, 0.25),
+    (1.98, 298.6, 2.96, 54.98, 0.16),
+    (1.98, 298.6, 4.12, 48.43, 0.15),
+    (1.98, 298.6, 5.69, 39.59, 0.17),
+    (1.98, 298.6, 10.25, 34.09, 0.35),
+    (1.98, 298.6, 14.82, 33.74, 0.40),
+    (1.98, 298.6, 19.90, 33.61, 0.46),
+    (1.98, 333.2, 4.09, 53.20, 0.19),
+    (1.98, 333.2, 7.86, 42.14, 0.15),
+    (1.98, 333.2, 18.85, 33.34, 0.27),
+    (1.98, 333.2, 41.72, 31.22, 0.40),
+    (1.98, 333.2, 54.76, 30.99, 0.53),
+    (1.98, 373.3, 4.61, 50.69, 0.19),
+    (1.98, 373.3, 11.49, 39.01, 0.24),
+    (1.98, 373.3, 21.94, 31.76, 0.22),
+    (1.98, 373.3, 43.18, 28.31, 0.32),
+    (1.98, 373.3, 69.51, 27.16, 0.38),
+    (1.98, 423.2, 5.65, 44.36, 0.17),
+    (1.98, 423.2, 12.17, 36.00, 0.18),
+    (1.98, 423.2, 21.88, 29.07, 0.15),
+    (1.98, 423.2, 44.35, 23.25, 0.22),
+    (1.98, 423.2, 69.00, 21.64, 0.23)
+)
+
+
+class _NaClIFTIncrement:
+    """
+    dSigma(T, P, m) = IFT(CO2 + NaCl brine) - IFT(CO2 + pure water), from the
+    42 measured brine points minus the pure-water interpolant at the same
+    (T, P). Reconstructs the paper's own mean increases (1.38 / 1.95 mN/m at
+    0.98 mol/kg and 2.69 / 3.66 at 1.98 mol/kg, against its quoted 1.42 / 2.01
+    and 2.67 / 3.73 for 298 K / 333-423 K).
+
+    Four isotherms (25.5, 60.1, 100.2, 150.2 C), two molalities. Along each
+    isotherm the increment is a PCHIP interpolant of the measured points; at a
+    given P the isotherms that cover it are interpolated across temperature;
+    then the increment is interpolated in molality through (0, 0), (0.98, d1),
+    (1.98, d2). The increment is NOT linear in molality: at the same (T, P) the
+    1.98 mol/kg value is typically only 1.5-1.8x the 0.98 mol/kg value.
+
+    Coverage is tracked per molality level, and only the level(s) the request
+    needs are required: m <= 0.98 uses d1 alone; larger m uses d1 and d2.
+    Nothing is extrapolated silently. The second return value is False when T
+    lies outside 25.5-150.2 C, P below the lowest measured pressure (3-7 MPa
+    depending on isotherm and level) or above the highest (20 MPa at 25 C,
+    55 MPa at 60 C, 69 MPa above) by more than P_SLACK, or m exceeds 1.98
+    mol/kg by more than 10 %. Then T and P are clamped, and m beyond 1.98 is
+    extrapolated linearly from the last segment.
+    """
+    GROUP_K = 1.5
+    M_SLACK = 1.10
+    P_SLACK = 0.5      # MPa above the highest measured P; the increment is flat there
+
+    def __init__(self, table, water):
+        self.m = sorted({r[0] for r in table})
+        Ts = sorted({r[1] for r in table})
+        groups = []
+        for t in Ts:
+            if groups and t - groups[-1][-1] <= self.GROUP_K:
+                groups[-1].append(t)
+            else:
+                groups.append([t])
+        n = len(groups)
+        self.T_C = np.array([np.mean(g) - 273.15 for g in groups])
+        self.P_lo = np.zeros((len(self.m), n))
+        self.P_hi = np.zeros((len(self.m), n))
+        self._fn = {}
+        for i, g in enumerate(groups):
+            for j, m in enumerate(self.m):
+                pts = sorted((P, ift - water(T_K - 273.15, P)[0])
+                             for (mm, T_K, P, ift, _u) in table if mm == m and T_K in g)
+                P = np.array([p for p, _ in pts])
+                d = np.array([x for _, x in pts])
+                self._fn[(j, i)] = PchipInterpolator(P, d)
+                self.P_lo[j, i] = P[0]
+                self.P_hi[j, i] = P[-1]
+
+    def _level(self, j, T_C, P_MPa):
+        """Increment at molality level j, and whether (T, P) is covered."""
+        n = len(self.T_C)
+        idx = [i for i in range(n)
+               if self.P_lo[j, i] <= P_MPa <= self.P_hi[j, i] + self.P_SLACK]
+        in_range = True
+        if not idx:
+            idx = list(range(n))
+            in_range = False
+        Ts = self.T_C[idx]
+        T_use = min(max(T_C, Ts.min()), Ts.max())
+        if abs(T_use - T_C) > 0.5:      # 0.5 K tolerance at the edges of the data
+            in_range = False
+        vals = np.array([float(self._fn[(j, i)](min(max(P_MPa, self.P_lo[j, i]), self.P_hi[j, i])))
+                         for i in idx])
+        if len(idx) == 1:
+            return float(vals[0]), in_range
+        if len(idx) == 2:
+            return float(np.interp(T_use, Ts, vals)), in_range
+        return float(PchipInterpolator(Ts, vals)(T_use)), in_range
+
+    def __call__(self, T_C, P_MPa, m):
+        """-> (increment [mN/m], True if inside the measured data)."""
+        if m <= 0:
+            return 0.0, True
+        m1, m2 = self.m
+        d1, ok = self._level(0, T_C, P_MPa)
+        if m <= m1:
+            return float(d1 * m / m1), bool(ok)
+        d2, ok2 = self._level(1, T_C, P_MPa)
+        if m <= m2:
+            d = d1 + (d2 - d1) * (m - m1) / (m2 - m1)
+        else:
+            d = d2 + (d2 - d1) / (m2 - m1) * (m - m2)
+        return float(d), bool(ok and ok2 and m <= m2 * self.M_SLACK)
+
+    def explain(self, T_C, P_MPa, m, check_molality=True):
+        """List of dict(outside=..., estimated_by=...) for the parts of the salt
+        increment at (T, P, m) that are not a plain interpolation of Pereira
+        (2017). Mirrors _level()/__call__ (same coverage tests)."""
+        notes, seen = [], set()
+        if m <= 0:
+            return notes
+        n = len(self.T_C)
+        for j in ((0,) if m <= self.m[0] else (0, 1)):
+            idx = [i for i in range(n)
+                   if self.P_lo[j, i] <= P_MPa <= self.P_hi[j, i] + self.P_SLACK]
+            if not idx:
+                lo, hi = self.P_lo[j].min(), self.P_hi[j].max()
+                new = [dict(
+                    outside=f"P = {P_MPa:.1f} MPa is {'below' if P_MPa < lo else 'above'} "
+                            f"the measured NaCl-brine pressures ({lo:.1f}–{hi:.0f} MPa)",
+                    estimated_by="salt increment held at its value at the nearest "
+                                 "measured pressure on each isotherm, then interpolated "
+                                 "in temperature")]
+                idx = list(range(n))
+            else:
+                new = []
+            Ts = self.T_C[idx]
+            T_use = min(max(T_C, Ts.min()), Ts.max())
+            if abs(T_use - T_C) > 0.5:
+                new.append(dict(
+                    outside=f"T = {T_C:.0f} °C, P = {P_MPa:.1f} MPa has no NaCl-brine "
+                            f"measurements (at this pressure the data span "
+                            f"{Ts.min():.1f}–{Ts.max():.1f} °C)",
+                    estimated_by=f"salt increment taken at {T_use:.1f} °C, the nearest "
+                                 f"measured temperature for this pressure"))
+            for nt in new:
+                if nt["outside"] not in seen:
+                    seen.add(nt["outside"])
+                    notes.append(nt)
+        if check_molality and m > self.m[-1] * self.M_SLACK:
+            notes.append(dict(
+                outside=f"molality {m:.2f} mol/kg is above the highest measured "
+                        f"({self.m[-1]:.2f} mol/kg)",
+                estimated_by="salt increment extrapolated linearly in molality from "
+                             "the last two measured levels"))
+        return notes
+
+
+_NACL_INC = None
+
+
+def _nacl_increment():
+    global _NACL_INC
+    if _NACL_INC is None:
+        _NACL_INC = _NaClIFTIncrement(_PEREIRA2017_NACL, _pereira_ift())
+    return _NACL_INC
+
+
+# ── Brine density and viscosity: Laliberte (2009) ────────────────────────────
+# Laliberte, M. (2009) J. Chem. Eng. Data 54(6), 1725-1760, doi:10.1021/je8008123
+# (supersedes Laliberte & Cooper 2004 density and Laliberte 2007 viscosity).
+#   Eq 1  1/rho_m = w_w/rho_w + w_s/rho_app
+#   Eq 3  rho_app = (c0(1-w_w)+c1) exp(1e-6 (t+c4)^2) / ((1-w_w) + c2 + c3 t)
+#   Eq 5  eta_m   = eta_w^w_w * eta_s^w_s
+#   Eq 7  eta_s   = exp((V1(1-w_w)^V2 + V3)/(V4 t + 1)) / (V5 (1-w_w)^V6 + 1)
+# t in degC, w = mass fraction.  The coefficients are in the paper's Supporting
+# Information spreadsheet (not the PDF); they were taken from the `chemicals`
+# package's copy of that table and checked against the fitted ranges printed in
+# the paper's Tables 53 (KI) and 84 (NaCl) -- t and w_max match exactly.
+# The fits are at ~atmospheric pressure, so the model is applied as a RATIO to
+# pure water and multiplied onto CoolProp's water at the actual (T, P): the
+# freshwater limit is then exactly CoolProp, and water's P dependence is kept.
+_LAL = {
+    "NaCl": dict(
+        M=Mw_NaCl,
+        c=(-0.00324112223655149, 0.0636354335906616, 1.01371399467365,
+           0.0145951015210159, 3317.34854426537),
+        v=(16.221788633396, 1.32293086770011, 1.48485985010431,
+           0.00746912559657377, 30.7802007540575, 2.05826852322558),
+        rho_T=(0.0, 140.0), rho_wmax=0.26589930421877,
+        mu_T=(5.0, 154.0),  mu_wmax=0.264456748962402),
+    "KI": dict(
+        M=Mw_KI,
+        c=(278.943640132031, 1407.61912896448, 2.50114423686534,
+           0.0138511632772227, 1387.54108036637),
+        v=(2.98583852051338, 2.37765263680441, 0.49977486681403,
+           0.00934248088339622, 1.70893863931587, -0.00165048180254392),
+        rho_T=(0.0, 100.02), rho_wmax=0.6669,
+        mu_T=(5.0, 95.0),    mu_wmax=0.6274217585693),
+}
+
+
+def _lal_rho_w(t):
+    """Laliberte's own pure-water density (Eq 2), kg/m3 -- the reference the
+    apparent-density fit was made against."""
+    return ((((((-2.8054253e-10 * t + 1.0556302e-7) * t - 4.6170461e-5) * t
+               - 0.0079870401) * t + 16.945176) * t + 999.83952)
+            / (1.0 + 0.01687985 * t))
+
+
+def _lal_mu_w(t):
+    """Laliberte's own pure-water viscosity (Eq 6), mPa.s."""
+    return (t + 246.0) / ((0.05594 * t + 5.2842) * t + 137.37)
+
+
+def _lal_ratios(salt, T_C, w):
+    """(rho_m/rho_w, mu_m/mu_w, extrapolated) of a `salt` solution of mass
+    fraction w, from Laliberte's own water -- a pure salt effect.  T is held at
+    the edge of each fitted range (never extrapolated); `extrapolated` is True
+    if either T or w left the range the fit was made on."""
+    p = _LAL[salt]
+    c0, c1, c2, c3, c4 = p["c"]
+    V1, V2, V3, V4, V5, V6 = p["v"]
+    ww = 1.0 - w
+    tr = min(max(T_C, p["rho_T"][0]), p["rho_T"][1])
+    tm = min(max(T_C, p["mu_T"][0]), p["mu_T"][1])
+    rho_app = (((c0 * w + c1) * np.exp(1e-6 * (tr + c4) ** 2)) / (w + c2 + c3 * tr))
+    rho_w = _lal_rho_w(tr)
+    rho_m = 1.0 / (ww / rho_w + w / rho_app)
+    eta_s = (np.exp((V1 * w ** V2 + V3) / (V4 * tm + 1.0)) / (V5 * w ** V6 + 1.0))
+    eta_w = _lal_mu_w(tm)
+    eta_m = eta_w ** ww * eta_s ** w
+    extrap = bool(T_C != tr or T_C != tm or w > p["rho_wmax"] or w > p["mu_wmax"])
+    return float(rho_m / rho_w), float(eta_m / eta_w), extrap
+
+
+def _brine_state(salt, conc, T_C, rho_water):
+    """Solve a brine of given composition for its mass fraction.
+
+    conc : g/L of solution for NaCl, mol/L of solution for KI (the UI inputs).
+    The concentration fixes the solute mass per m3 of SOLUTION, so w = c/rho_m
+    and rho_m depends on w: a contraction, solved by fixed-point iteration.
+
+    Returns dict(w, molality [mol/kg water], rho [kg/m3], mu_ratio,
+    extrapolated), with rho = CoolProp water density x Laliberte's ratio.
+    """
+    if conc <= 0:
+        return dict(w=0.0, molality=0.0, rho=float(rho_water), mu_ratio=1.0,
+                    extrapolated=False)
+    p = _LAL[salt]
+    c_kg_m3 = conc if salt == "NaCl" else conc * p["M"] * 1000.0
+    rho = float(rho_water) * 1.05
+    for _ in range(40):
+        w = min(c_kg_m3 / rho, 0.95)
+        rr, _, _ = _lal_ratios(salt, T_C, w)
+        new = float(rho_water) * rr
+        if abs(new - rho) < 1e-9 * rho:
+            rho = new
+            break
+        rho = new
+    w = min(c_kg_m3 / rho, 0.95)
+    rr, mr, extrap = _lal_ratios(salt, T_C, w)
+    return dict(w=w, molality=w / ((1.0 - w) * p["M"]), rho=float(rho_water) * rr,
+                mu_ratio=mr, extrapolated=extrap)
+
+
+def _rho_water_cp(T_C, P_MPa):
+    """CoolProp liquid-water density for the molality helpers (kg/m3)."""
+    T_K = T_C + 273.15
+    try:
+        P_Pa = max(P_MPa * 1e6, CP.PropsSI("P", "T", T_K, "Q", 0, "Water") * 1.001)
+        return CP.PropsSI("D", "T", T_K, "P", P_Pa, "Water")
+    except Exception:
+        return 1000.0
+
+
+def _nacl_molality(S_g_L, T_C, P_MPa):
+    """g/L of solution -> mol NaCl per kg of water (Laliberte density)."""
+    if S_g_L <= 0:
+        return 0.0
+    return _brine_state("NaCl", S_g_L, T_C, _rho_water_cp(T_C, P_MPa))["molality"]
+
+
+def _ki_molality(ki_mol_L, T_C, P_MPa):
+    """mol/L of solution -> mol KI per kg of water (Laliberte density)."""
+    if ki_mol_L <= 0:
+        return 0.0
+    return _brine_state("KI", ki_mol_L, T_C, _rho_water_cp(T_C, P_MPa))["molality"]
+
 
 # ── Helper functions ──────────────────────────────────────────────────────────
 
@@ -213,6 +740,18 @@ def _nw_props(fluid_id, T_K, P_Pa):
     return _coolprop_props(NW_FLUIDS[fluid_id]["coolprop"], T_K, P_Pa)
 
 
+# ============================================================================
+# UNUSED since 2026-10-09 -- brine corrections of kappa_T, alpha, c_p and gamma.
+#
+# Anna chose to correct ONLY density and viscosity for salt and to report every
+# other wetting-phase property at pure-water values, labelled as such in the UI
+# ("Pure water thermodynamic properties"). Nothing below, down to and including
+# _brine_alpha_cp(), is called any more. It is kept (validated, but never
+# committed elsewhere) in case the brine thermodynamics are wanted again:
+# kappa_T fits KAPPA_NACL / KAPPA_KI; expansivity and heat-capacity fits
+# _BRINE_FIT; the validity ranges _BRINE_FIT_RANGE; and _WITHHELD_WITH_SALT.
+# Source for all of it: Apelblat (2017), J. Mol. Liq., supplementary tables.
+# ============================================================================
 # Isothermal compressibility of brine, relative to pure water:
 #     κ_T(m) / κ_T(water) = exp(-KAPPA_SALT * m),   m in mol/kg WATER
 #
@@ -241,12 +780,63 @@ def _nw_props(fluid_id, T_K, P_Pa):
 KAPPA_NACL = 0.106
 KAPPA_KI   = 0.122
 
-# Properties that carry NO salt correction and are reported as pure water.
-# Anything listed here must be flagged in the UI.
-# Only DISPLAYED properties are listed — c_p, c_v and gamma are pure water too
-# but are no longer shown, so flagging them would be invisible noise.
-_W_PURE_WATER_BASE = ["expansivity_1_K", "conductivity_W_mK",
-                      "joule_thomson_K_MPa", "Z"]
+# Thermal expansivity and heat capacity of NaCl(aq) and KI(aq), fitted to the
+# SAME paper's supplementary Tables S2 (NaCl) and S12 (KI): density, viscosity,
+# specific heat capacity and isobaric thermal expansivity at 0.1, 0.5 and
+# 1.0 mol/kg, 5-80 °C, ~0.1 MPa.
+#
+#   expansivity  alpha_brine = alpha_water(T,P) + m**p * poly3(t) * 1e-4   [1/K]
+#   heat cap.    cp_brine = (cp_water(T,P) + m*phi(t)) / (1 + m*M)         [J/kg/K]
+#                with phi = apparent molar heat capacity [J/mol/K]
+# t = (T_C - 40)/40, polynomial coefficients in increasing powers. Residuals
+# against the tables: NaCl alpha rms 0.06e-4 /K (0.02e-4 up to 60 °C); KI alpha
+# rms 0.13e-4 /K (0.07e-4 up to 60 °C).
+#
+# Heat capacity is used ONLY inside c_p - c_v = T*alpha^2/(rho*kappa_T), i.e. for
+# the brine heat-capacity ratio gamma. It is deliberately NOT displayed: the
+# supplement's heat-capacity columns fail an ionic-additivity test (KI is 33
+# J/mol/K away from NaI + KCl - NaCl; RbCl is wildly off), so they are not
+# trustworthy as measurements. gamma - 1 is ~0.02 and scales as 1/c_v, so a
+# 1% error in c_p moves gamma by ~2e-4 -- immaterial.
+#
+# Fitted only inside the measured range; outside it the temperature polynomial
+# is HELD at its boundary value (a cubic diverges quickly) and the response
+# carries brine_fit_extrapolated = True.
+_BRINE_FIT = {
+    "NaCl": {"M": 0.05844, "p": 0.82710423,
+             "a":   [0.31743469, -0.81175858, 0.50114249, -0.18259056],
+             "phi": [-71.135048, 24.760999, -47.064616, 28.521852]},
+    "KI":   {"M": 0.16600, "p": 1.29844540,
+             "a":   [0.68019851, -0.83792974, -0.34823445, -0.95369127],
+             "phi": [-71.133111, 24.982246, -46.828793, 28.190801]},
+}
+# m_max is the top of the measured data; m_flag is where the UI starts calling
+# it extrapolated. The 10% slack matters: 1.0 mol/L NaCl is 1.014 mol/kg and
+# 1.0 mol/L KI is 1.044 mol/kg, i.e. the default state sits AT the edge of the
+# data, and flagging that would be a spurious warning on every first load.
+#
+# P_MPa: the supplement does not state a pressure for its tables; they are
+# ASSUMED atmospheric (~0.1 MPa). The salt increments are applied on top of
+# CoolProp's pure-water value at the actual pressure, which has not been
+# validated, so anything above P_MPa is marked as extrapolated too.
+_BRINE_FIT_RANGE = {"T_C": (5.0, 80.0), "m_max": 1.0, "m_flag": 1.1, "P_MPa": 1.0}
+
+# Properties withheld (reported as None) whenever salt is present. They have no
+# sourced brine correction; reporting the pure-water value, even flagged, was
+# rejected. Z is also not meaningful for a liquid. For freshwater they ARE the
+# exact pure-water values and are shown.
+_WITHHELD_WITH_SALT = ["conductivity_W_mK", "joule_thomson_K_MPa", "Z"]
+
+
+def _brine_alpha_cp(salt, m, T_C, alpha_w, cp_w):
+    """Brine thermal expansivity [1/K] and specific heat [J/kg/K] from the
+    Apelblat (2017) supplementary-table fits above."""
+    f = _BRINE_FIT[salt]
+    lo, hi = _BRINE_FIT_RANGE["T_C"]
+    t = (min(max(T_C, lo), hi) - 40.0) / 40.0         # hold at the fitted edge
+    d_alpha = (m ** f["p"]) * np.polyval(f["a"][::-1], t) * 1e-4
+    phi = np.polyval(f["phi"][::-1], t)
+    return alpha_w + d_alpha, (cp_w + m * phi) / (1.0 + m * f["M"])
 
 
 def _water_is_liquid(T_K, P_Pa):
@@ -267,126 +857,59 @@ def _water_is_liquid(T_K, P_Pa):
 
 
 def _w_props(T_K, P_Pa, S_g_L, ki_mol_L=0.0):
-    """Thermodynamic properties of the wetting (brine) phase.
+    """Properties of the wetting (water / brine) phase.
 
-    Salt-corrected, BOTH salts on the same footing:
-      NaCl: Rowe & Chou (1970) density; Mao & Duan (2009) viscosity.
-      KI  : CRC Handbook density (~128 kg/m3 per mol/L);
-            Jones-Dole viscosity (negative B coefficient -> slight decrease).
-      both: isothermal compressibility from measured κ_T, Apelblat (2017)
-            (KAPPA_NACL / KAPPA_KI above); speed of sound then follows from
-            density and κ_T by the exact identity c² = γ/(ρ·κ_T).
+    ONLY density and viscosity carry a salt correction, both from
+    Laliberte (2009) for NaCl and KI (see `_LAL`): its solution/water ratio
+    is multiplied onto CoolProp water at (T, P). `brine_extrapolated` is set
+    when T or the mass fraction leaves the range the fit was made on.
 
-    NOT salt-corrected (pure-water values, flagged via "uncorrected_props"):
-      expansivity, thermal conductivity, Joule-Thomson and Z -- plus c_p, c_v
-      and γ, which are computed but no longer displayed.
+    EVERY OTHER property -- speed of sound, compressibility, expansivity, heat
+    capacities, γ, thermal conductivity, Joule-Thomson, Z -- is the PURE-WATER
+    value from CoolProp at (T, P), for freshwater and brine alike. The UI labels
+    that section "Pure water thermodynamic properties". A brine correction of
+    κ_T, α and γ fitted to Apelblat (2017) was built and deliberately dropped
+    on 2026-10-09; the unused fits are kept above.
     """
     T_C = T_K - 273.15
 
-    # GUARD: every correlation below (Rowe & Chou density, Mao & Duan
-    # viscosity, KAPPA_NACL compressibility, Jones-Dole) is a LIQUID
-    # correlation. Below the saturation pressure CoolProp hands back steam and
-    # these would be applied to it regardless -- at 200 C / 0.1 MPa that turned
-    # 0.46 kg/m3 of vapour into a "brine" at 45.1 kg/m3 with a 57 m/s sound
-    # speed. Report nothing and say why, rather than a plausible-looking wrong
-    # number. This also makes `flow` None downstream, so no Ca or Bo is
-    # produced from a non-liquid wetting phase.
+    # GUARD: the Laliberte correlations are LIQUID correlations. Below the saturation
+    # pressure CoolProp hands back steam and these would be applied to it
+    # regardless -- at 200 C / 0.1 MPa that turned 0.46 kg/m3 of vapour into a
+    # "brine" at 45.1 kg/m3. Report nothing and say why, rather than a
+    # plausible-looking wrong number. This also makes `flow` None downstream,
+    # so no Ca or Bo is produced from a non-liquid wetting phase.
     if not _water_is_liquid(T_K, P_Pa):
         out = {k: None for k in (*PROP_META, *_INTERNAL_PROPS)}
         out["water_not_liquid"]  = True
-        out["uncorrected_props"] = []
         out["mu_water_Pas"]      = np.nan
         return out
 
-    # Pure water base: full property set, single state point
+    # Pure water: full property set, single state point
     w = _coolprop_props("Water", T_K, P_Pa)
-    rho_w   = w["density_kg_m3"]
-    mu_w    = (w["viscosity_uPas"] / 1e6) if w["viscosity_uPas"] else np.nan
-    kappa_w = (w["compressibility_1_GPa"] / 1e9) if w["compressibility_1_GPa"] else np.nan
-    gamma_w = w["gamma"] if w["gamma"] else np.nan
+    rho_w = w["density_kg_m3"]
+    mu_w  = (w["viscosity_uPas"] / 1e6) if w["viscosity_uPas"] else np.nan
     if rho_w is None:
         rho_w = np.nan
 
-    uncorrected = []
-
-    def _molality(c_mol_L, Mw_kg_mol, rho_kg_m3):
-        """
-        mol/L of solution -> mol/kg of WATER, which is what the compressibility
-        coefficients are fitted against. Ignoring this treats 1 mol/L KI as
-        1 mol/kg when it is really 1.05, a 5% error in the exponent.
-        """
-        if not np.isfinite(rho_kg_m3):
-            return c_mol_L
-        kg_water_per_L = rho_kg_m3 / 1000.0 - c_mol_L * Mw_kg_mol
-        return c_mol_L / kg_water_per_L if kg_water_per_L > 0 else c_mol_L
-
+    # Salt correction: Laliberte (2009) ratio applied to CoolProp water.
+    T_C_ = T_K - 273.15
     if ki_mol_L > 0:
-        # KI density: CRC Handbook data, ~128 kg/m3 per mol/L at 25 C
-        d_rho = ki_mol_L * (128.0 - 0.04 * T_C)
-        rho_b = rho_w + d_rho if np.isfinite(rho_w) else np.nan
-
-        # KI viscosity: Jones-Dole; negative B -> decreases viscosity
-        ln_mu_r = ki_mol_L * (-0.090 + 1.5e-4 * (T_K - 298.15))
-        mu_b = mu_w * np.exp(ln_mu_r) if np.isfinite(mu_w) else np.nan
-
-        # Compressibility: Apelblat (2017) Table 11 (see KAPPA_KI above)
-        m = _molality(ki_mol_L, Mw_KI, rho_b)
-        kappa_b = kappa_w * np.exp(-KAPPA_KI * m) if np.isfinite(kappa_w) else np.nan
-        if m > 0:
-            uncorrected = list(_W_PURE_WATER_BASE)
+        st = _brine_state("KI", ki_mol_L, T_C_, rho_w)
+    elif S_g_L > 0:
+        st = _brine_state("NaCl", S_g_L, T_C_, rho_w)
     else:
-        # Density: Rowe & Chou (1970); Batzle & Wang (1992)
-        d_rho = S_g_L * (0.824 - 4.66e-4 * T_C + 8.4e-7 * T_C ** 2)
-        rho_b = rho_w + d_rho if np.isfinite(rho_w) else np.nan
-
-        c_mol_L = S_g_L / (Mw_NaCl * 1000)          # g/L -> mol/L
-        m = _molality(c_mol_L, Mw_NaCl, rho_b)      # -> mol/kg water
-
-        # Viscosity: Mao & Duan (2009)
-        A_mao, B_mao = 1.9741e-2, -4.22e-5
-        mu_b = mu_w * np.exp(m * (A_mao + B_mao * T_K)) if np.isfinite(mu_w) else np.nan
-
-        # Compressibility: Apelblat (2017) Table S1 (see KAPPA_NACL above)
-        kappa_b = kappa_w * np.exp(-KAPPA_NACL * m) if np.isfinite(kappa_w) else np.nan
-        if m > 0:
-            uncorrected = list(_W_PURE_WATER_BASE)
-
-    # Speed of sound from the EXACT identity c² = γ/(ρ·κ_T), so it stays
-    # consistent with the density and compressibility just derived. Both salts
-    # now have a measured κ_T, so both take this path.
-    #
-    # LIMITATION — γ is taken as PURE WATER's. Inverting the identity on
-    # Apelblat's measured ρ, c and κ_T recovers the true brine γ, and it is
-    # systematically HIGHER than water's by roughly 1% per mol/kg
-    # (NaCl ≈ 1 + 0.008·m, KI ≈ 1 + 0.012·m). Because c ∝ √γ, holding γ at the
-    # pure-water value biases the sound speed LOW by about half that:
-    #
-    #     1 mol/kg -> c low by ~0.6%      3 mol/kg -> ~1.8%
-    #     6 mol/kg -> c low by ~3.4%
-    #
-    # The bias is one-directional, so it never averages out. It is left in
-    # deliberately: correcting it needs a third salt-specific coefficient and
-    # only improves the mean error in c from ~0.3% to ~0.1%. Flagged to the UI
-    # via "gamma_is_pure_water" so the approximation is visible, not hidden.
-    if np.isfinite(kappa_b) and np.isfinite(rho_b) and np.isfinite(gamma_w) \
-            and rho_b > 0 and kappa_b > 0:
-        c_b      = np.sqrt(gamma_w / (rho_b * kappa_b))
-        kappa_sb = kappa_b / gamma_w
-    else:
-        c_b, kappa_sb = np.nan, np.nan
+        st = dict(rho=rho_w, mu_ratio=1.0, extrapolated=False)
+    rho_b = st["rho"] if np.isfinite(rho_w) else np.nan
+    mu_b = mu_w * st["mu_ratio"] if np.isfinite(mu_w) else np.nan
 
     out = dict(w)                       # pure-water values for everything else
     out.pop("phase", None)              # the wetting phase is always liquid here
     out["density_kg_m3"]           = _safe(rho_b)
     out["viscosity_uPas"]          = _safe(mu_b * 1e6)
-    out["compressibility_1_GPa"]   = _safe(kappa_b * 1e9)
-    out["compressibility_s_1_GPa"] = _safe(kappa_sb * 1e9)
-    out["speed_sound_m_s"]         = _safe(c_b)
-    out["uncorrected_props"]       = uncorrected
     out["water_not_liquid"]        = False
-    # True whenever salt is present: c was built with pure-water γ (see above)
-    out["gamma_is_pure_water"]     = bool(m > 0)
-    out["mu_water_Pas"]            = mu_w   # internal, for diffusivity below
+    out["brine_extrapolated"]      = bool(st["extrapolated"])
+    out["mu_water_Pas"]            = mu_w   # internal, for the viscosity ratio below
     return out
 
 
@@ -563,54 +1086,275 @@ def _solubility(nw_id, T_K, P_MPa, mu_w_Pas, S_g_L, ki_mol_L=0.0):
     }
 
 
-def _diffusivity(nw_id, T_K, mu_w_Pas):
-    """
-    Stokes-Einstein scaling of diffusivity:
-        D = D_25 * (T / 298.15) * (μ_25 / μ_w)
+# UNUSED since 2026-10-14 (Anna: diffusion coefficient not useful for this tool;
+# removed from the API response, UI and methods draft). Kept, validated, so that
+# restoring it is one `_diffusivity(nw_id, T_K)` call in calculate() plus the
+# `diffusivity_*` keys in `interaction` and a UI row.
+# Diffusion coefficient of CO2 in PURE WATER: Cadogan, Maitland & Trusler (2014),
+# J. Chem. Eng. Data 59, 519-525, doi:10.1021/je401008s. Taylor-dispersion data,
+# 298-423 K, 14-50 MPa, standard relative uncertainty 2.3 %; D was found
+# essentially independent of pressure. Their modified Stokes-Einstein relation
+# (eqs 7a and 8, n_SE = 4):
+#     D = k_B T / (n_SE pi eta a),   a = a298 [1 + alpha (T/K - 298)]
+# with a298 = 168 pm, alpha = 2.0e-3 for CO2 (2.9 % rms against their data).
+# Because D is pressure-independent in the data, eta is the pure-water
+# viscosity at a FIXED reference pressure (0.1 MPa, or just above P_sat where
+# that is higher): that reproduces their data to 2.7 % rms, whereas using
+# eta(T, P) drifts to -9 % at 48 MPa (4.5 % rms) because water's viscosity
+# rises with pressure and D does not.
+KB = 1.380649e-23
+DIFF_T_RANGE_K = (298.15 - 0.5, 423.15 + 0.5)   # measured, with the 0.5 K edge slack used elsewhere
+DIFF_P_RANGE_MPa = (14.0, 50.0)                 # measured
 
-    Reference viscosity at 25°C, 1 atm.
-    """
+
+def _diffusivity(nw_id, T_K):
+    """CO2 diffusion coefficient in pure water [m2/s] (Cadogan et al. 2014)."""
     sol = NW_FLUIDS[nw_id]
     try:
-        mu25 = CP.PropsSI("V", "T", 298.15, "P", 1e5, "Water")
+        P_ref = max(1e5, CP.PropsSI("P", "T", T_K, "Q", 0, "Water") * 1.01)
+        eta = CP.PropsSI("V", "T", T_K, "P", P_ref, "Water")
     except Exception:
-        mu25 = 8.9e-4  # Pa·s
+        return None
+    a = sol["SE_a298_pm"] * 1e-12 * (1.0 + sol["SE_alpha"] * (T_K - 298.0))
+    return _safe(KB * T_K / (4.0 * np.pi * eta * a))
 
-    D = sol["D25"] * (T_K / 298.15) * (mu25 / mu_w_Pas) if (
-        np.isfinite(mu_w_Pas) and mu_w_Pas > 0
-    ) else np.nan
-    return _safe(D)
+
+def diffusivity_out_of_range(T_K, P_MPa):
+    """True outside the measured T (298-423 K) or p (14-50 MPa) of the
+    diffusion data. The correlation itself is pressure-free, so a low pressure
+    means the measured pressure-independence is being assumed, not tested."""
+    return not (DIFF_T_RANGE_K[0] <= T_K <= DIFF_T_RANGE_K[1]
+                and DIFF_P_RANGE_MPa[0] <= P_MPa <= DIFF_P_RANGE_MPa[1])
+
+
+def _brine_ions(T_C, P_MPa, S_g_L, ki_mol_L):
+    """Ion molalities [mol/kg water] for the Mutailipu model: NaCl from g/L,
+    KI from mol/L (Laliberte density). KI is mapped to a 1:1 potassium salt
+    (iodide is not in the model's anion set) -- an ESTIMATE, see _ift()."""
+    if ki_mol_L > 0:
+        return _mut.ions_from_salt("KI", _ki_molality(ki_mol_L, T_C, P_MPa))
+    if S_g_L > 0:
+        return _mut.ions_from_salt("NaCl", _nacl_molality(S_g_L, T_C, P_MPa))
+    return {}
 
 
 def _ift(nw_id, T_C, P_MPa, S_g_L, ki_mol_L=0.0):
     """
-    Interfacial tension [mN/m] from 2-D interpolation of published data (fresh water).
-    NaCl correction: +0.04 mN/m per g/L (Hebach et al. 2002).
-    KI correction: -0.8 mN/m per mol/L (Weissenborn & Pugh 1996; KI is a
-    surface-active chaotrope that slightly decreases surface tension).
+    Interfacial tension [mN/m].
+
+    CO2: the correlation of Mutailipu, Song, Yao, Liu & Trusler (2024), Fuel
+    357, 129712 -- see mutailipu.py. Validated here against the measurements of
+    Pereira et al. (2016) (CO2-water, 78 points: mean +0.2, rms 1.0 mN/m) and
+    Pereira et al. (2017) (CO2-NaCl(aq), 42 points: mean 0.0, rms 0.9 mN/m).
+    Valid 273-473 K, up to 70 MPa, up to 5 mol/kg salt; outside that,
+    ift_out_of_range() is True and range_flags() says how it is estimated.
+    KI: an ESTIMATE (reported as such via interaction.ift_is_estimate). The
+    model has no iodide, and its brine term depends only on the charge-weighted
+    CATION molality, so KI is treated as a 1:1 potassium salt at its own
+    molality. Whether iodide behaves like chloride at the CO2/water interface
+    is not established by any measurement known to us.
+    The earlier implementation interpolated the measured data directly; it is
+    kept as _ift_interpolated() as an independent cross-check.
+
+    Returns None when water is not liquid at (T, P) (below its saturation
+    pressure it is steam, and there is no CO2-water interface); the solubility
+    solver does not converge there either, so any number would be meaningless.
     """
-    # NOTE: clamped, NOT extrapolated. Outside the table the value is held at
-    # the nearest edge, so it stops being a measurement -- callers should use
-    # ift_out_of_range() and say so. This matters now that the pressure limit
-    # reaches 40 MPa (for the deeper CCS sites) while the table stops at 20.
-    T_clamp = np.clip(T_C, _IFT_T[0], _IFT_T[-1])
-    P_clamp = np.clip(P_MPa, _IFT_P[0], _IFT_P[-1])
-    ift_fw = float(_IFT_INTERP[nw_id]([[T_clamp, P_clamp]]).flat[0])
+    if not _water_is_liquid(T_C + 273.15, P_MPa * 1e6):
+        return None
+    if nw_id == "CO2":
+        r = _mut.ift(T_C + 273.15, P_MPa, _brine_ions(T_C, P_MPa, S_g_L, ki_mol_L))
+        return _safe(r["ift"])
+    return _ift_interpolated(nw_id, T_C, P_MPa, S_g_L, ki_mol_L)
+
+
+def _ift_interpolated(nw_id, T_C, P_MPa, S_g_L, ki_mol_L=0.0):
+    """
+    Interfacial tension by DIRECT INTERPOLATION of measured data (the app's
+    method until 2026-10-27; now a cross-check only).
+
+    CO2: pure-water IFT interpolated from the measured data of Pereira et al.
+    (2016); see _PereiraIFT. NaCl: the measured increment of Pereira et al.
+    (2017); see _NaClIFTIncrement. Outside the data the temperature (and, for
+    the NaCl increment, the pressure) is clamped, NOT extrapolated.
+    KI: the NaCl increment at the same molality.
+    """
+    if nw_id == "CO2":
+        ift_fw, _ = _pereira_ift()(T_C, P_MPa)
+    else:                       # dormant H2 / N2 grid path
+        T_clamp = np.clip(T_C, _IFT_T[0], _IFT_T[-1])
+        P_clamp = np.clip(P_MPa, _IFT_P[0], _IFT_P[-1])
+        ift_fw = float(_IFT_INTERP[nw_id]([[T_clamp, P_clamp]]).flat[0])
     if ki_mol_L > 0:
-        ift = ift_fw - 0.8 * ki_mol_L
+        if nw_id == "CO2":
+            d, _ = _nacl_increment()(T_C, P_MPa, _ki_molality(ki_mol_L, T_C, P_MPa))
+        else:
+            d = -0.8 * ki_mol_L     # dormant non-CO2 path (old air/water proxy)
+        ift = ift_fw + d
+    elif S_g_L > 0:
+        if nw_id == "CO2":
+            d, _ = _nacl_increment()(T_C, P_MPa, _nacl_molality(S_g_L, T_C, P_MPa))
+        else:
+            d = 0.04 * S_g_L    # dormant non-CO2 path (old coefficient)
+        ift = ift_fw + d
     else:
-        ift = ift_fw + 0.04 * S_g_L
+        ift = ift_fw
     return _safe(ift)
 
 
-def ift_out_of_range(T_C, P_MPa):
+def ift_out_of_range(T_C, P_MPa, S_g_L=0.0, ki_mol_L=0.0):
     """
-    True when (T, P) falls outside the measured IFT table, i.e. _ift() has
-    clamped to an edge value and the returned IFT is no longer interpolated
-    from data. Table covers 10-200 °C and 0.1-20 MPa.
+    True when the state lies outside the validity range of the IFT model
+    (Mutailipu 2024: 273-473 K, up to 70 MPa, up to 5 mol/kg salt).
     """
-    return bool(T_C < _IFT_T[0] or T_C > _IFT_T[-1]
-                or P_MPa < _IFT_P[0] or P_MPa > _IFT_P[-1])
+    return bool(_ift_notes(T_C, P_MPa, S_g_L, ki_mol_L))
+
+
+def _ift_notes(T_C, P_MPa, S_g_L=0.0, ki_mol_L=0.0):
+    ions = _brine_ions(T_C, P_MPa, S_g_L, ki_mol_L) if (S_g_L > 0 or ki_mol_L > 0) else {}
+    return _mut.validity_notes(T_C + 273.15, P_MPa, ions)
+
+
+def ift_three_phase_between(T_C, P_MPa, dT, dP):
+    """True if the (T +/- dT, P +/- dP) stencil straddles the CO2-H2O three-phase
+    line (T < 304.63 K only). The IFT really jumps there (b11 |tau|^1.25), so a
+    finite-difference derivative across it is meaningless."""
+    signs = set()
+    for a in (-dT, 0.0, dT):
+        T_K = T_C + a + 273.15
+        if T_K >= _mut.T_UCEP:
+            continue
+        p3 = _mut.p_three_phase_MPa(T_K)
+        for b in (-dP, 0.0, dP):
+            signs.add((P_MPa + b) >= p3)
+    return len(signs) == 2
+
+
+def ift_branch_between(T_C, P_MPa, dT, dP):
+    """
+    None, "three_phase" or "branch_point": does the (T +/- dT, P +/- dP) stencil
+    cross a place where the IFT correlation is not differentiable?
+
+    * "three_phase": below 304.63 K the IFT jumps across the CO2-H2O three-phase
+      line (a real step, Delta-gamma-3).
+    * "branch_point": at every temperature the correlation switches from the
+      gas-liquid form (x1 <= x3) to the liquid-liquid/dense form (x1 > x3), which
+      agree in VALUE at x1 = x3 but not in SLOPE, so a central difference across
+      it is a blend of two one-sided slopes. x1 and x3 are salt-free, so the
+      branch is located with pure water.
+    """
+    if ift_three_phase_between(T_C, P_MPa, dT, dP):
+        return "three_phase"
+    regions = set()
+    for a in (-dT, 0.0, dT):
+        for b in (-dP, 0.0, dP):
+            regions.add(_mut.ift(T_C + a + 273.15, P_MPa + b, {})["region"])
+    return "branch_point" if len(regions) > 1 else None
+
+
+def _ift_out_of_range_interpolated(T_C, P_MPa, S_g_L=0.0, ki_mol_L=0.0):
+    """
+    Coverage test for _ift_interpolated(): the pure-water data (Pereira 2016:
+    25-196 C, pressure reach rising with T), and, with NaCl (or KI, via the NaCl
+    data) present, the brine data (Pereira 2017: 25.5-150.2 C, about 3-6 MPa and
+    up, at most 2.2 mol/kg).
+    """
+    ok = _pereira_ift()(T_C, P_MPa)[1]
+    if ok and ki_mol_L > 0:
+        # KI IFT is flagged as an ESTIMATE everywhere (ift_is_estimate), so its
+        # concentration is deliberately NOT tested against the NaCl molality
+        # limit (1.98 mol/kg): that would add a "clamped" flag for what is a
+        # mild linear extrapolation in molality. T and P coverage still counts,
+        # because outside it the increment really is held at an edge value.
+        ok = _nacl_increment()(T_C, P_MPa, 1.0)[1]
+    elif ok and S_g_L > 0:
+        ok = _nacl_increment()(T_C, P_MPa, _nacl_molality(S_g_L, T_C, P_MPa))[1]
+    return not ok
+
+
+# ── Out-of-source-range flags ────────────────────────────────────────────────
+# Published T/P limits of the equation of state behind each CoolProp fluid.
+_CP_LIMITS = {
+    "nw": dict(label="CO₂ density and thermodynamic properties",
+               source="Span & Wagner (1996)", T_K=(216.592, 1100.0), P_MPa=800.0),
+    "w":  dict(label="Water density and thermodynamic properties",
+               source="Wagner & Pruß (2002), IAPWS-95", T_K=(273.16, 1273.0), P_MPa=1000.0),
+}
+
+
+def _brine_range_notes(salt, conc, T_C, P_MPa):
+    """Laliberte (2009) fit-range notes, split by property:
+    -> {"density": [...], "viscosity": [...]} of dict(outside, estimated_by)."""
+    p = _LAL[salt]
+    w = _brine_state(salt, conc, T_C, _rho_water_cp(T_C, P_MPa))["w"]
+    out = {"density": [], "viscosity": []}
+    for prop, (key, wkey) in (("density", ("rho_T", "rho_wmax")),
+                              ("viscosity", ("mu_T", "mu_wmax"))):
+        lo, hi = p[key]
+        if T_C < lo or T_C > hi:
+            edge = lo if T_C < lo else hi
+            out[prop].append(dict(
+                outside=f"T = {T_C:.0f} °C is {'below' if T_C < lo else 'above'} the "
+                        f"{salt} {prop} fit range ({lo:g}–{hi:g} °C)",
+                estimated_by=f"salt effect (solution/pure-water ratio) held at its "
+                             f"{edge:g} °C value and applied to CoolProp pure-water "
+                             f"{prop} at the actual T and P"))
+        if w > p[wkey]:
+            out[prop].append(dict(
+                outside=f"{w*100:.1f} wt% {salt} is above the fitted maximum "
+                        f"({p[wkey]*100:.0f} wt%)",
+                estimated_by="Laliberté model evaluated beyond its fitted composition "
+                             "range (extrapolated)"))
+    return out
+
+
+def range_flags(T_C, P_MPa, S_g_L=0.0, ki_mol_L=0.0, water_liquid=True):
+    """
+    Every quantity whose (T, P, composition) lies outside the range of the
+    published source behind it, and HOW the app then estimates it.
+
+    -> list of dict(applies_to, quantity, source, outside, estimated_by), with
+    applies_to in {"nw", "w_density", "w_viscosity", "ift"} (where the UI puts
+    the red flag). Empty when everything is inside its source's range.
+    """
+    flags = []
+
+    def add(applies_to, quantity, source, notes):
+        for n in notes:
+            flags.append(dict(applies_to=applies_to, quantity=quantity,
+                              source=source, **n))
+
+    T_K = T_C + 273.15
+    lim = _CP_LIMITS["nw"]
+    if not (lim["T_K"][0] <= T_K <= lim["T_K"][1]) or P_MPa > lim["P_MPa"]:
+        add("nw", lim["label"], lim["source"], [dict(
+            outside=f"T = {T_C:.0f} °C, P = {P_MPa:.1f} MPa is outside the equation "
+                    f"of state's stated range ({lim['T_K'][0]-273.15:.1f}–"
+                    f"{lim['T_K'][1]-273.15:.0f} °C, up to {lim['P_MPa']:.0f} MPa)",
+            estimated_by="CoolProp extrapolates the equation of state")])
+    if not water_liquid:
+        return flags
+
+    lim = _CP_LIMITS["w"]
+    if not (lim["T_K"][0] <= T_K <= lim["T_K"][1]) or P_MPa > lim["P_MPa"]:
+        add("w_density", lim["label"], lim["source"], [dict(
+            outside=f"T = {T_C:.0f} °C, P = {P_MPa:.1f} MPa is outside the equation "
+                    f"of state's stated range ({lim['T_K'][0]-273.15:.2f}–"
+                    f"{lim['T_K'][1]-273.15:.0f} °C, up to {lim['P_MPa']:.0f} MPa)",
+            estimated_by="CoolProp extrapolates the equation of state")])
+
+    salt, conc = (("KI", ki_mol_L) if ki_mol_L > 0
+                  else ("NaCl", S_g_L) if S_g_L > 0 else (None, 0.0))
+    if salt:
+        bn = _brine_range_notes(salt, conc, T_C, P_MPa)
+        add("w_density", f"{salt} brine density", "Laliberté (2009)", bn["density"])
+        add("w_viscosity", f"{salt} brine viscosity", "Laliberté (2009)", bn["viscosity"])
+
+    # CO2-water / brine IFT: validity range of the Mutailipu et al. (2024) model
+    # (273-473 K, up to 70 MPa, up to 5 mol/kg salt).
+    add("ift", "CO₂–" + ("brine" if salt else "water") + " interfacial tension",
+        "Mutailipu et al. (2024)", _ift_notes(T_C, P_MPa, S_g_L, ki_mol_L))
+    return flags
 
 
 # ── Flow-derived dimensionless numbers ───────────────────────────────────────
@@ -787,12 +1531,21 @@ def surface_grid(fluid_key, T_min_C, T_max_C, P_min_MPa, P_max_MPa,
 # reported. It reproduces them to 6 figures, which is a free check on the method.
 
 SENS_DT = 0.05     # K,   converged (see below)
-SENS_DP = 0.005    # MPa, the differencing half-step (5 kPa)
+SENS_DP = 0.0005   # MPa, the differencing half-step (0.5 kPa = 1/20 of the 10 kPa
+                   # reporting unit, the same ratio as SENS_DT to its unit, 1 K)
 SENS_P_SCALE = 0.01   # %/MPa -> %/10 kPa
+NEAR_CRITICAL_KP = 5.0   # flag when the NW fluid's kappa_T*P >= this (see sensitivity_block)
 
 # Step size matters near the critical point, where the derivative genuinely
 # diverges: CO2 density at 32 °C/7.5 MPa reads -63 %/K at a 0.5 K step but
 # converges to -32.0 %/K below 0.01 K. Do not coarsen these.
+# The same test for pressure (checked 2026-10-27, same state): S_P of CO2 density
+# reads +3.48 %/10 kPa at a 50 kPa half-step, +2.48 at 20 kPa, +2.370 at 5 kPa
+# and converges to +2.364 below 1 kPa. The half-step was 5 kPa (0.3% off) until
+# 2026-10-27, when it was set to 0.5 kPa = 1/20 of the reporting unit, the same
+# ratio as the 0.05 K step to its 1 K unit (0.9% off at this state). Away from the
+# critical point both steps are converged to 4+ figures. The half-steps are
+# independent of the reporting units (%/K, %/10 kPa).
 
 SENS_PROPS = [
     ("density_kg_m3",        "Density"),
@@ -827,10 +1580,13 @@ def sensitivity_block(T_C, P_MPa, nw_id, S_g_L, ki_mol_L=0.0):
     Relative T and P sensitivity of the NW and wetting-phase properties, plus
     the Ca/Bo decomposition. See the header comment for the definition.
 
-    IFT honesty: above the IFT table's 20 MPa ceiling _ift() clamps, so
-    dSigma/dP is identically zero for a NON-PHYSICAL reason. That would read as
-    "IFT is pressure-insensitive here", so S_P(sigma) and everything derived
-    from it is reported as None with sigma_clamped set, rather than as 0.
+    IFT honesty: the IFT derivatives are withheld (None, `clamped` set, with a
+    `reason`) when the finite-difference stencil (a) leaves the model's validity
+    range, where the value is an extrapolation, (b) straddles the CO2-H2O
+    three-phase line below 304.63 K, where the IFT genuinely jumps, or (c)
+    straddles the x1 = x3 branch point (at every temperature), where the
+    correlation's slope is discontinuous (see ift_branch_between). In all cases
+    a difference quotient is an artefact, not a sensitivity.
     """
     nw_f = lambda k: (lambda T, P: _nw_props(nw_id, T + 273.15, P * 1e6)[k])
     w_f  = lambda k: (lambda T, P: _w_props(T + 273.15, P * 1e6, S_g_L,
@@ -847,12 +1603,38 @@ def sensitivity_block(T_C, P_MPa, nw_id, S_g_L, ki_mol_L=0.0):
                      "ratio_T": _safe(ratio[0]) if ratio[0] else None,
                      "ratio_P": _safe(ratio[1]) if ratio[1] else None})
 
-    # IFT, and whether its pressure derivative is real
+    # IFT, and whether its derivatives are real (any of the stencil points
+    # outside the measured data makes them an artefact of the clamp)
     sig_f = lambda T, P: _ift(nw_id, T, P, S_g_L, ki_mol_L=ki_mol_L)
     sigT, sigP = _rel_sens(sig_f, T_C, P_MPa)
-    sigma_clamped = ift_out_of_range(T_C, P_MPa) or ift_out_of_range(T_C, P_MPa + SENS_DP)
+    sigma_out = any(ift_out_of_range(T_C + dT, P_MPa + dP, S_g_L, ki_mol_L)
+                    for dT in (-SENS_DT, 0.0, SENS_DT) for dP in (-SENS_DP, 0.0, SENS_DP))
+    if not _water_is_liquid(T_C + 273.15, P_MPa * 1e6):
+        # water is steam: no IFT at all (see _ift), so nothing to flag -- a plain dash
+        sigma_out, sigma_kink, sigT, sigP = False, None, None, None
+    else:
+        sigma_kink = None if sigma_out else ift_branch_between(T_C, P_MPa, SENS_DT, SENS_DP)
+    sigma_clamped = sigma_out or bool(sigma_kink)
+    sigma_reason = "out_of_range" if sigma_out else sigma_kink
     if sigma_clamped:
-        sigP = None
+        sigT = sigP = None
+
+    # Near the critical point (and along the Widom line above it) the nonwetting
+    # fluid's derivatives genuinely diverge. Measure of closeness: the isothermal
+    # compressibility relative to an ideal gas, kappa_T * P (= 1 for an ideal gas,
+    # 2-4 for a dense supercritical fluid, 15+ within a few K and a few hundred kPa
+    # of the CO2 critical point). Chosen from a 121-state map (T 25-80 C, P 5-20 MPa)
+    # of CO2 density, compressibility and viscosity: at kappa_T*P >= 5 it flags
+    # 7 states and every state whose current differencing steps are >1% off the
+    # converged derivative is among them.
+    kP = None
+    try:
+        kap = _nw_props(nw_id, T_C + 273.15, P_MPa * 1e6)["compressibility_1_GPa"]
+        kP = _safe(kap * 1e-3 * P_MPa) if kap is not None else None   # 1/GPa -> 1/MPa
+    except Exception:
+        pass
+    near_critical = {"flag": bool(kP is not None and kP >= NEAR_CRITICAL_KP),
+                     "kappa_T_P": kP, "threshold": NEAR_CRITICAL_KP}
 
     # Δrho drives Bo
     def drho(T, P):
@@ -878,8 +1660,11 @@ def sensitivity_block(T_C, P_MPa, nw_id, S_g_L, ki_mol_L=0.0):
         "dT_K": SENS_DT, "dP_MPa": SENS_DP,
         "unit_T": "%/K", "unit_P": "%/10 kPa",
         "rows": rows,
-        "ift":  {"S_T": sigT, "S_P": sigP, "clamped": bool(sigma_clamped)},
+        "ift":  {"S_T": sigT, "S_P": sigP, "clamped": bool(sigma_clamped),
+                 "reason": sigma_reason,
+                 "estimate": bool(ki_mol_L > 0)},
         "drho": {"S_T": dT_, "S_P": dP_},
+        "near_critical": near_critical,
         "derived": derived,
         "note_fixed_Q": True,
     }
@@ -887,131 +1672,134 @@ def sensitivity_block(T_C, P_MPa, nw_id, S_g_L, ki_mol_L=0.0):
 
 # ── Field CCS sites on the CO2 phase diagram ─────────────────────────────────
 #
-# IN-SITU conditions at the injection interval (NOT wellhead or injected-stream
-# conditions, which differ -- at Sleipner the injected CO2 arrives ~12 C warmer
-# than the formation). Each entry records where its numbers come from:
+# ALL conditions here come from ONE compilation, Imre, Ramboz, Deiters & Kraska
+# (2015), Environ. Earth Sci. 73, 4373-4384 (doi:10.1007/s12665-014-3716-5),
+# which in turn quotes the original references recorded in each entry. A site is
+# listed only if that paper reports it. (Until 2026-10-21 this table mixed values
+# from six different sources, four of them second-hand; those sites were dropped.)
 #
-#   provenance "primary"   -> the cited source was read directly and the T and P
-#                             values below are quoted from it
-#   provenance "secondary" -> values reported in the site literature and located
-#                             via that reference, but the source was not read
-#                             directly here; CHECK BEFORE PUBLISHING
+# Sites are RANGES, not points: each carries one or more "regions", a box
+# T_min..T_max x P_min..P_max in degC and MPa. A region with equal min and max
+# on an axis is a line, and on both axes a point. They are drawn as boxes.
 #
-# To add a site, append a dict with the same keys. T_C and P_MPa are both
-# required (a site cannot be placed on the diagram without them).
+# These are the P-T conditions Imre et al. report for each site. For Nagaoka
+# they are the WELL HEAD and WELL BOTTOM conditions, not a reservoir range;
+# Imre et al. state that the storage P-T conditions there are not available.
+#
+# To add a site, append a dict with the same keys (and at least one region).
+# "label_at" is the [T, P] the name label points to and "label_px" its [dx, dy]
+# offset in pixels (dy positive is DOWN). They are hand-set because the sites
+# overlap (Nagaoka's well head sits inside Sleipner's box), so automatic
+# placement collides.
 CCS_SITES = [
     {
-        "key": "sleipner", "name": "Sleipner", "country": "Norway",
-        "formation": "Utsira Fm (saline aquifer)",
-        "depth_m": 1012, "T_C": 35.5, "P_MPa": 10.5,
-        "start": 1996, "status": "Operating",
-        "scale": "~1 Mt/yr; >13 Mt by 2011",
-        "reference": "Chadwick & Eiken (2013), ch. 10 in Gluyas & Mathias (eds), "
-                     "Geological Storage of Carbon Dioxide (CO2), Woodhead",
-        "provenance": "primary",
-        "note": "Quoted: initial temperature ~35.5 °C at the 1012 m injection "
-                "depth (~29 °C at reservoir top); hydrostatic pressure 10.5 MPa "
-                "at the injection point.",
+        "key": "sleipner", "name": "Sleipner", "location": "North Sea",
+        "formation": "Utsira Formation",
+        "regions": [
+            {"label": "Storage conditions in the Utsira Fm",
+             "T_min": 25.0, "T_max": 42.0, "P_min": 8.0, "P_max": 11.0,
+             "label_at": [25.0, 11.0], "label_px": [-25, -30]},
+        ],
+        "reference": "Imre et al. (2015), Environ. Earth Sci. 73, 4373–4384",
+        "original": "Baklid et al. (1996); Bickle et al. (2007); Arts et al. "
+                    "(2008); Ringrose & Eiken (2011)",
+        "note": "Imre et al. note these conditions lie close to the Widom region, "
+                "and that ~2 mol% CH4 in the injected stream could shift the "
+                "compressibility maximum by ~5 K.",
     },
     {
-        "key": "ketzin", "name": "Ketzin", "country": "Germany",
-        "formation": "Stuttgart Fm (saline aquifer)",
-        "depth_m": 630, "T_C": 33.5, "P_MPa": 6.1,
-        "start": 2008, "status": "Completed 2013",
-        "scale": "67 kt total (pilot)",
-        "reference": "Martens et al. (2012), Environmental Earth Sciences 67, 323–334",
-        "provenance": "secondary",
-        "note": "Initial target-horizon conditions reported as 33.5 °C / 6.1 MPa "
-                "at 630 m. Pressure is BELOW the CO2 critical pressure, so the "
-                "stored CO2 is not supercritical here.",
+        "key": "snohvit", "name": "Snøhvit", "location": "Barents Sea",
+        "formation": "Sandy reservoir, ~2.6 km below sea level",
+        "regions": [
+            {"label": "Initial (2008, ~29 MPa) to 2011 (~39 MPa)",
+             "T_min": 98.0, "T_max": 100.0, "P_min": 29.0, "P_max": 39.0,
+             "label_at": [100.0, 34.0], "label_px": [40, 0]},
+        ],
+        "reference": "Imre et al. (2015), Environ. Earth Sci. 73, 4373–4384",
+        "original": "Hansen et al. (2011); Hansen et al. (2013)",
+        "note": "Initial conditions ~29 MPa and 98–100 °C in 2008; reservoir "
+                "pressure rose to ~39 MPa by 2011 under near-continuous "
+                "injection because of limited permeability. Drawn as one box "
+                "spanning that pressure rise.",
     },
     {
-        "key": "in_salah", "name": "In Salah (Krechba)", "country": "Algeria",
-        "formation": "Carboniferous sandstone",
-        "depth_m": 1880, "T_C": 93.0, "P_MPa": 17.5,
-        "start": 2004, "status": "Injection ceased 2011",
-        "scale": "~3.8 Mt total",
-        "reference": "Iding & Ringrose (2010), Int. J. Greenhouse Gas Control 4, 242–248",
-        "provenance": "secondary",
-        "note": "Storage unit at 1880 m with initial pressure 17.5 MPa and "
-                "temperature 366.15 K (93 °C).",
+        "key": "nagaoka", "name": "Nagaoka", "location": "Japan",
+        "formation": "—",
+        "regions": [
+            {"label": "Well head",
+             "T_min": 32.0, "T_max": 32.0, "P_min": 7.0, "P_max": 11.0,
+             "label_at": [32.0, 11.0], "label_px": [50, -40]},
+            {"label": "Well bottom",
+             "T_min": 48.0, "T_max": 48.0, "P_min": 19.0, "P_max": 19.0,
+             "label_at": [48.0, 19.0], "label_px": [40, 0]},
+        ],
+        "reference": "Imre et al. (2015), Environ. Earth Sci. 73, 4373–4384",
+        "original": "Kikuta et al. (2005)",
+        "note": "Well-head (7–11 MPa, 32 °C) and well-bottom (19 MPa, 48 °C) "
+                "conditions, not a reservoir range. Imre et al. state that "
+                "details of the storage P–T conditions and their evolution "
+                "are lacking.",
     },
     {
-        "key": "frio", "name": "Frio Brine Pilot", "country": "USA (Texas)",
-        "formation": "Frio Fm (Oligocene fluvial sandstone)",
-        "depth_m": 1650, "T_C": 55.0, "P_MPa": 16.5,
-        "start": 2004, "status": "Completed (pilot)",
-        "scale": "~1.6 kt total",
-        "reference": "Doughty et al. (2008), Energy 33, 1092–1099 "
-                     "(Frio pilot; see also Hovorka et al. 2006, Environmental Geosciences 13)",
-        "provenance": "secondary",
-        "note": "Brine reservoir reported at ~16.5 MPa and ~55 °C at ~1650 m; "
-                "CO2 injected in the supercritical state.",
-    },
-    {
-        "key": "snohvit", "name": "Snøhvit", "country": "Norway",
-        "formation": "Tubåen Fm (fluvial sandstone)",
-        "depth_m": 2600, "T_C": 95.0, "P_MPa": 33.0,
-        "start": 2008, "status": "Tubåen injection ceased 2011",
-        "scale": "~1.1 Mt into Tubåen",
-        "reference": "Hansen et al. (2013), Energy Procedia 37, 3565–3573 (GHGT-11)",
-        "provenance": "primary",
-        "note": "T and P supplied by A. Herring (95 °C, ~330 bar). NOTE the "
-                "Tubåen pressure was NOT steady: reported initial ~290 bar "
-                "rising to ~390 bar, which is why Tubåen injection was stopped "
-                "and moved to the Stø Fm. 330 bar is a mid-injection value, so "
-                "this site is a band in pressure rather than a point.",
-    },
-    {
-        "key": "quest", "name": "Quest", "country": "Canada (Alberta)",
-        "formation": "Basal Cambrian Sands (saline aquifer)",
-        "depth_m": 2000, "T_C": 60.0, "P_MPa": 20.45,
-        "start": 2015, "status": "Operating",
-        "scale": "~1.08 Mt/yr captured",
-        "reference": "Quest Carbon Capture and Storage Project, Volume 1: Project "
-                     "Description (Shell Canada / Government of Alberta), "
-                     "open.alberta.ca",
-        "provenance": "primary",
-        "note": "Initial reservoir T and P read from the project description by "
-                "A. Herring. Depth ~2 km is the commonly quoted BCS figure and is "
-                "approximate; T and P are the sourced values.",
-    },
-    {
-        "key": "ibdp", "name": "Illinois Basin – Decatur (Mt. Simon)", "country": "USA (Illinois)",
-        "formation": "Mt. Simon Sandstone (saline aquifer)",
-        "depth_m": 2140, "T_C": 50.0, "P_MPa": 22.0,
-        "start": 2011, "status": "Injection completed 2014",
-        "scale": "~1 Mt total (IBDP)",
-        "reference": "Illinois Basin – Decatur Project reservoir characterisation "
-                     "literature; see Finley (2014), Greenhouse Gases: Sci. Technol. 4, 571–579",
-        "provenance": "secondary",
-        "note": "APPROXIMATE, assembled from several sources: injection interval "
-                "2129.6–2149.4 m; ~2.2e4 kPa (~22 MPa) at 2147 m; reservoir "
-                "modelled as isothermal at ~49 °C (lab studies at 51 °C). "
-                "Pin the primary reference before publishing.",
+        "key": "ketzin", "name": "Ketzin", "location": "Germany",
+        "formation": "—",
+        "regions": [
+            {"label": "Initial reservoir conditions",
+             "T_min": 33.5, "T_max": 34.0, "P_min": 6.1, "P_max": 6.2,
+             "label_at": [33.75, 6.15], "label_px": [55, 35]},
+        ],
+        "reference": "Imre et al. (2015), Environ. Earth Sci. 73, 4373–4384",
+        "original": "Kempka & Kühn (2013); Loizzo et al. (2013)",
+        "note": "The box spans the two sources' initial conditions. Kempka & Kühn: "
+                "62 bar at 639.5 m in well Ktzi 201/2007, temperature taken as "
+                "constant at 34 °C through the reservoir. Loizzo et al.: 33.5 °C "
+                "and 6.1 MPa at 630 m. Loizzo et al. also report the Ktzi 200 "
+                "wellhead pressure rising and stabilising near 5.1 MPa after CO₂ "
+                "arrived in July 2008; no wellhead temperature is given, so that "
+                "is not plotted. Pressure is below the CO₂ critical pressure.",
     },
 ]
 
-# Sites located but NOT plotted, because a reservoir T or P could not be
-# sourced in this session. Surfaced in the UI so the gap is visible rather
-# than silently missing.
-CCS_SITES_PENDING = [
-    {"name": "Gorgon", "country": "Australia", "have": "Dupuy Fm at ~2300 m; "
-     "formation water up to ~100 °C", "missing": "initial reservoir pressure"},
-    {"name": "Cranfield", "country": "USA (Mississippi)", "have": "lower Tuscaloosa "
-     "Fm at ~3200 m", "missing": "reservoir temperature and pressure"},
-]
+# Sites that Imre et al. report but whose values are not yet entered. They are
+# listed in the UI so the gap is visible, and nothing is estimated. (Empty
+# since Ketzin was entered 2026-10-21.)
+CCS_SITES_PENDING = []
+
+
+def _ccs_state(T_C, P_MPa, Tc_C, Pc_MPa):
+    """(CO2 density [kg/m3] or None, regime label, supercritical?) at one state.
+
+    The regime comes from explicit comparison with T_c and P_c, not from
+    CoolProp's phase index, which calls T > T_c, P < P_c "supercritical" even
+    though the density there is gas-like.
+    """
+    try:
+        rho = float(CP.PropsSI("D", "T", T_C + 273.15, "P", P_MPa * 1e6, "CO2"))
+    except Exception:
+        rho = None
+    if T_C >= Tc_C:
+        sc = P_MPa >= Pc_MPa
+        regime = "Supercritical" if sc else "Gas-like (above T<sub>c</sub>, below P<sub>c</sub>)"
+    else:
+        sc = False
+        try:
+            Psat = CP.PropsSI("P", "T", T_C + 273.15, "Q", 0, "CO2") / 1e6
+            regime = "Liquid" if P_MPa >= Psat else "Vapour"
+        except Exception:
+            regime = "—"
+    return rho, regime, bool(sc)
 
 
 def co2_phase_diagram(T_min_C=-20.0, T_max_C=140.0,
                       P_min_MPa=0.5, P_max_MPa=40.0,
                       iso_densities=(200, 400, 600, 700, 800, 900)):
     """
-    CO2 phase diagram in (T, P) with field CCS sites placed on it.
+    CO2 phase diagram in (T, P) with field CCS sites placed on it as
+    P-T ranges (boxes), per Imre et al. (2015).
 
     Returns the vapour-pressure (saturation) curve, the critical and triple
     points, exact iso-density contours, and each site annotated with the CO2
-    density and phase CoolProp gives at its reservoir conditions.
+    density range and regimes CoolProp gives over its reported P-T range.
 
     Iso-density curves are solved EXACTLY rather than contoured from a grid:
     for each target density, P = PropsSI("P", "T", T, "D", rho). States inside
@@ -1056,32 +1844,45 @@ def co2_phase_diagram(T_min_C=-20.0, T_max_C=140.0,
         if len(cT) > 1:
             iso.append({"rho": float(rho), "T_C": cT, "P_MPa": cP})
 
-    # Place the sites and evaluate CO2 there
+    # Place the sites and evaluate CO2 over each region. A region's density is
+    # the min-max over a grid spanning the box; its regime is every label met.
     sites = []
     for s in CCS_SITES:
         entry = dict(s)
-        props = _coolprop_props("CO2", s["T_C"] + 273.15, s["P_MPa"] * 1e6)
-        entry["co2_density_kg_m3"] = props["density_kg_m3"]
-        entry["co2_phase"]         = props["phase"]
-        entry["above_Tc"] = bool(s["T_C"] >= Tc_C)
-        entry["above_Pc"] = bool(s["P_MPa"] >= Pc_MPa)
-        # "Supercritical" in the storage sense: above BOTH critical values.
-        entry["supercritical"] = bool(entry["above_Tc"] and entry["above_Pc"])
-
-        # Explicit regime label. CoolProp reports T > Tc with P < Pc as
-        # "supercritical gas", which our phase map flattens to "Supercritical
-        # Fluid" -- misleading for a storage site, because the density there is
-        # gas-like. Ketzin is exactly this case, so label it from the critical
-        # comparisons instead.
-        if entry["above_Tc"]:
-            entry["regime"] = ("Supercritical" if entry["above_Pc"]
-                               else "Gas-like (above T_c, below P_c)")
-        else:
-            try:
-                Psat = CP.PropsSI("P", "T", s["T_C"] + 273.15, "Q", 0, "CO2") / 1e6
-                entry["regime"] = "Liquid" if s["P_MPa"] >= Psat else "Vapour"
-            except Exception:
-                entry["regime"] = "—"
+        regions = []
+        for r in s["regions"]:
+            Ts = np.linspace(r["T_min"], r["T_max"], 9)
+            Ps = np.linspace(r["P_min"], r["P_max"], 9)
+            rhos, labels, scs = [], [], []
+            for T_ in Ts:
+                for P_ in Ps:
+                    rho, reg, sc = _ccs_state(float(T_), float(P_), Tc_C, Pc_MPa)
+                    if rho is not None:
+                        rhos.append(rho)
+                    if reg not in labels:
+                        labels.append(reg)
+                    scs.append(sc)
+            rr = dict(r)
+            rr["T_mid"] = 0.5 * (r["T_min"] + r["T_max"])
+            rr["P_mid"] = 0.5 * (r["P_min"] + r["P_max"])
+            rr["is_point"] = bool(r["T_min"] == r["T_max"] and r["P_min"] == r["P_max"])
+            rr["rho_min"] = float(min(rhos)) if rhos else None
+            rr["rho_max"] = float(max(rhos)) if rhos else None
+            rr["regimes"] = labels
+            rr["all_supercritical"] = bool(all(scs))
+            regions.append(rr)
+        entry["regions"] = regions
+        all_rho = [v for r in regions for v in (r["rho_min"], r["rho_max"]) if v is not None]
+        entry["rho_min"] = float(min(all_rho)) if all_rho else None
+        entry["rho_max"] = float(max(all_rho)) if all_rho else None
+        regs = []
+        for r in regions:
+            for g in r["regimes"]:
+                if g not in regs:
+                    regs.append(g)
+        entry["regimes"] = regs
+        # Fully supercritical only if EVERY sampled state in EVERY region is
+        entry["supercritical"] = bool(all(r["all_supercritical"] for r in regions))
         sites.append(entry)
 
     return {
@@ -1134,8 +1935,11 @@ def calculate(T_C: float, P_MPa: float, nw_id: str, w_id: str,
     w_out["ki_mol_L"]    = ki
 
     # ── Interaction / transport ───────────────────────────────────────────────
-    sol   = _solubility(nw_id, T_K, P_MPa, mu_w if np.isfinite(mu_w) else 1e-3, S, ki_mol_L=ki)
-    D     = _diffusivity(nw_id, T_K, mu_w if np.isfinite(mu_w) else 1e-3)
+    # Solubility removed from the response 2026-10-08 (not needed for this
+    # tool). The whole validated solubility path (_solubility, Duan & Sun,
+    # Duan 1992 EOS, Henry+KK) is retained below; restoring it is one
+    # _solubility() call here plus a "solubility" key in `interaction` and
+    # the three UI rows.
     ift   = _ift(nw_id, T_C, P_MPa, S, ki_mol_L=ki)
 
     # Mobility & density ratios (useful for multiphase flow)
@@ -1154,9 +1958,8 @@ def calculate(T_C: float, P_MPa: float, nw_id: str, w_id: str,
     interaction = {
         "ift_mN_m":        ift,
         "ift_source":      IFT_SOURCES[nw_id],
-        "ift_out_of_range": ift_out_of_range(T_C, P_MPa),
-        "solubility":      sol,
-        "diffusivity_m2_s": D,
+        "ift_out_of_range": ift_out_of_range(T_C, P_MPa, S, ki_mol_L=ki),
+        "ift_is_estimate":  bool(ki > 0),   # KI: no CO2/KI IFT data; see _ift()
         "mobility_ratio":   mobility_ratio,
         "density_ratio":    density_ratio,
         "buoyancy_N_m3":    buoyancy_N_m3,
@@ -1168,8 +1971,8 @@ def calculate(T_C: float, P_MPa: float, nw_id: str, w_id: str,
     # NW takes precedence if both are somehow supplied.
     # Use the SAME viscosities compute_flow uses, so the returned Ca reproduces
     # the target exactly. Note mu_w_Pas above is the pure-water viscosity (for
-    # solubility/diffusivity); the wetting phase in the flow calculation is the
-    # brine, whose viscosity differs once salt is present.
+    # diffusivity); the wetting phase in the flow calculation is the brine,
+    # whose viscosity differs once salt is present.
     mu_w_flow_Pas = (w_out.get("viscosity_uPas") or 0) * 1e-6
 
     derived_Q    = None
@@ -1223,4 +2026,6 @@ def calculate(T_C: float, P_MPa: float, nw_id: str, w_id: str,
         "interaction": interaction,
         "sensitivity": sens,
         "flow":   flow,
+        "range_flags": range_flags(T_C, P_MPa, S, ki_mol_L=ki,
+                                   water_liquid=not w_out.get("water_not_liquid", False)),
     }
