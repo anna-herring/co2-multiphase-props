@@ -61,9 +61,40 @@ W_FLUIDS = {
     "ki_brine": {"label": "KI Brine",     "default_S": 0.0,   "default_ki": 0.5},
 }
 
-# CoolProp phase integer → label
-_PHASE = {0: "Liquid", 1: "Supercritical Fluid", 2: "Supercritical Fluid",
-          3: "Supercritical Fluid", 5: "Gas", 6: "Two-phase", 7: "Unknown"}
+def _phase_label(cp_name, T_K, P_Pa, AS=None):
+    """Phase of a pure fluid at (T, P): "Liquid", "Gas", "Supercritical".
+
+    From explicit comparison with the critical point and the saturation curve,
+    NOT from CoolProp's phase index. CoolProp reports T < T_c, P > P_c as
+    "supercritical_liquid" (index 3) and T > T_c, P < P_c as
+    "supercritical_gas" (index 2); the old _PHASE dict mapped BOTH onto
+    "Supercritical Fluid", which mislabelled two perfectly ordinary states.
+
+    A compressed liquid below T_c is a LIQUID however high the pressure --
+    CO2 at 23 C / 8.62 MPa (rho = 811 kg/m3, above its 6.1 MPa vapour
+    pressure) is liquid, and was being reported as supercritical. Above T_c
+    but below P_c the fluid is gas-like. Supercritical requires BOTH
+    T >= T_c and P >= P_c.
+
+    Mirrors the regime logic in _ccs_state(), which already did this for the
+    phase-diagram panel; keep the two in step.
+    """
+    try:
+        Tc = AS.T_critical() if AS is not None else CP.PropsSI("Tcrit", cp_name)
+        Pc = AS.p_critical() if AS is not None else CP.PropsSI("pcrit", cp_name)
+    except Exception:
+        return "Unknown"
+
+    if T_K >= Tc:
+        return "Supercritical" if P_Pa >= Pc else "Gas"
+
+    # Below T_c the saturation curve decides. (A P-T state cannot land inside
+    # the two-phase dome: in P-T space that region is a curve, not an area.)
+    try:
+        Psat = CP.PropsSI("P", "T", T_K, "Q", 0, cp_name)
+    except Exception:
+        return "Unknown"
+    return "Liquid" if P_Pa >= Psat else "Gas"
 
 # ── IFT tables (mN/m) ────────────────────────────────────────────────────────
 # Pressure [MPa] and temperature [°C] grids for interpolation
@@ -717,7 +748,7 @@ def _coolprop_props(cp_name, T_K, P_Pa, state=None):
         out["gamma"]                   = _safe(gam)
         out["expansivity_1_K"]         = _safe(AS.isobaric_expansion_coefficient())
         out["Z"]                       = _safe(AS.compressibility_factor())
-        out["phase"]                   = _PHASE.get(AS.phase(), "Unknown")
+        out["phase"]                   = _phase_label(cp_name, T_K, P_Pa, AS)
 
         # Transport properties are unavailable in a few regions for some fluids
         try:
