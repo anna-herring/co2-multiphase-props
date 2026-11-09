@@ -604,6 +604,16 @@ async function fetchData() {
   $('spinner').style.display = 'block';
   $('results').style.display = 'none';
   $('error-msg').style.display = 'none';
+  // Ca and Bo scale as 1/cos θ, so they diverge at 90° (zero capillary pressure).
+  // The API rejects θ ≥ 90°; say why here instead of showing a bare "Server 422".
+  if (!(state.theta >= 0 && state.theta < 90)) {
+    $('error-msg').textContent = `Contact angle θ = ${$('theta-inp').value}° is outside the model range. ` +
+      'Ca and Bo scale as 1/cos θ, so they diverge as θ approaches 90° (zero capillary pressure). ' +
+      'Enter an angle from 0° to below 90° (the box stops at 89°).';
+    $('error-msg').style.display = 'block';
+    $('spinner').style.display = 'none';
+    return;
+  }
   const body = {
     T_C: state.T, P_MPa: state.P, nw_fluid: state.nw, w_fluid: state.w,
     salinity_g_L: state.w === 'brine'    ? state.S * 58.44 : null,
