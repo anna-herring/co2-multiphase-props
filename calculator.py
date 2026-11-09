@@ -1554,6 +1554,7 @@ def surface_grid(fluid_key, T_min_C, T_max_C, P_min_MPa, P_max_MPa,
 #     Ca = v·mu_inj/(sigma·cos θ)   and   Bo = Δrho·g·L²/(sigma·cos θ)
 # and v, g, L, θ do not depend on T or P at fixed flow rate:
 #     S(Ca_nw) = S(mu_nw) − S(sigma)        S(Bo) = S(Δrho) − S(sigma)
+# and, for the viscosity ratio M = mu_nw/mu_w,  S(M) = S(mu_nw) − S(mu_w).
 # Verified numerically to 4–5 significant figures. That decomposition is the
 # useful part: it says WHICH property drives an output's sensitivity.
 #
@@ -1679,10 +1680,14 @@ def sensitivity_block(T_C, P_MPa, nw_id, S_g_L, ki_mol_L=0.0):
     sub = lambda a, b: None if (a is None or b is None) else _safe(a - b)
 
     derived = [
+        # Display order used everywhere in the app: Ca_NW, Ca_W, M, Bo
         {"label": "Ca (NW injection)", "S_T": sub(mu_nw_T, sigT), "S_P": sub(mu_nw_P, sigP),
          "parts": "S(μ_NW) − S(σ)"},
         {"label": "Ca (W injection)",  "S_T": sub(mu_w_T, sigT),  "S_P": sub(mu_w_P, sigP),
          "parts": "S(μ_W) − S(σ)"},
+        # M = mu_NW/mu_W (calculate(): drainage convention); independent of sigma
+        {"label": "Viscosity ratio M", "S_T": sub(mu_nw_T, mu_w_T), "S_P": sub(mu_nw_P, mu_w_P),
+         "parts": "S(μ_NW) − S(μ_W)"},
         {"label": "Bond number Bo",    "S_T": sub(dT_, sigT),     "S_P": sub(dP_, sigP),
          "parts": "S(Δρ) − S(σ)"},
     ]

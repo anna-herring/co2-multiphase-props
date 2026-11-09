@@ -768,10 +768,10 @@ function render(d) {
       <tr class="section-head"><td colspan="2">Flow &amp; Dimensionless Numbers</td></tr>
       ${qRow}
       <tr><td>Interstitial velocity</td><td>${fmt(fl.velocity_um_s,2)} µm/s</td></tr>
-      <tr><td>Ca (W injection)</td><td>${fmtSci(fl.Ca_w,2)}</td></tr>
       <tr><td>Ca (NW injection)</td><td>${fmtSci(fl.Ca_nw,2)}</td></tr>
+      <tr><td>Ca (W injection)</td><td>${fmtSci(fl.Ca_w,2)}</td></tr>
+      <tr><td>Viscosity ratio M (μ<sub>NW</sub>/μ<sub>W</sub>)</td><td>${fmt(ix.mobility_ratio,4)}</td></tr>
       <tr><td>Bond number Bo</td><td>${fmtSci(fl.Bo,2)}</td></tr>
-      <tr><td>μ<sub>NW</sub>/μ<sub>W</sub></td><td>${fmt(ix.mobility_ratio,4)}</td></tr>
       <tr><td>ρ<sub>W</sub>/ρ<sub>NW</sub></td><td>${fmt(ix.density_ratio,2)}</td></tr>
     `;
   }
